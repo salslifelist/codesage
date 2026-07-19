@@ -15,10 +15,14 @@ from codesage.ai import (
     DEVELOPER_INSTRUCTIONS,
     MAX_OUTPUT_TOKENS,
     REQUEST_TIMEOUT_SECONDS,
+    CandidateRepairResponse,
     Finding,
+    ReviewMode,
     ReviewOutcome,
     ReviewResponse,
+    ScriptReviewResponse,
     create_openai_client,
+    normalise_script_response,
     review_script,
     script_candidate_limit,
 )
@@ -44,6 +48,21 @@ class FakeClient:
         self.responses = FakeResponses(result, error)
 
 
+class SequenceResponses:
+    def __init__(self, *results):
+        self.results = list(results)
+        self.calls = []
+
+    def parse(self, **kwargs):
+        self.calls.append(kwargs)
+        return self.results.pop(0)
+
+
+class SequenceClient:
+    def __init__(self, *results):
+        self.responses = SequenceResponses(*results)
+
+
 def api_result(parsed=None, *, status="completed", output=(), reason=None):
     details = SimpleNamespace(reason=reason) if reason else None
     return SimpleNamespace(
@@ -55,11 +74,11 @@ def api_result(parsed=None, *, status="completed", output=(), reason=None):
 
 
 def response(outcome=ReviewOutcome.NO_REFACTOR_NEEDED, candidate=None, findings=None):
-    return ReviewResponse(
+    return ScriptReviewResponse(
         outcome=outcome,
         summary="Grounded review summary.",
         findings=findings or [],
-        candidate=candidate,
+        candidate_source=candidate,
         suggested_tests=["Run the existing unit tests."],
     )
 
@@ -98,7 +117,7 @@ def test_request_boundary_is_exact_and_source_is_untrusted_data(monkeypatch):
     assert request["stream"] is False
     assert request["timeout"] == REQUEST_TIMEOUT_SECONDS
     assert request["max_output_tokens"] == MAX_OUTPUT_TOKENS
-    assert request["text_format"] is ReviewResponse
+    assert request["text_format"] is ScriptReviewResponse
     assert "tools" not in request
     assert source not in request["instructions"]
     assert request["instructions"] == DEVELOPER_INSTRUCTIONS
@@ -129,6 +148,47 @@ def test_json_envelope_contains_collision_text_only_as_data():
     second_client = FakeClient(api_result(response()))
     review_script(source, analysis, client=second_client)
     assert second_client.responses.calls[0]["input"] == client.responses.calls[0]["input"]
+
+
+def test_complete_multi_function_file_and_cross_file_findings_reach_review():
+    source = (
+        "def first(value=[]):\n    return value\n\n"
+        "class Later:\n"
+        "    def second(self, value={}):\n"
+        "        return value\n"
+    )
+    analysis = analyse_script(source)
+    package = build_evidence_package(analysis)
+    first_item = next(item for item in package.items if "function:first:" in item.source_reference)
+    later_item = next(item for item in package.items if "class:Later:" in item.source_reference)
+
+    def grounded(item, title):
+        return Finding(
+            title=title,
+            category="maintainability",
+            priority="medium",
+            source_reference=item.source_reference,
+            evidence_ids=[item.evidence_id],
+            explanation="Grounded explanation.",
+            recommendation="Grounded recommendation.",
+            learning_takeaway="Grounded takeaway.",
+            uncertainty="Static evidence only.",
+        )
+
+    parsed = response(
+        findings=[grounded(first_item, "First function"), grounded(later_item, "Later class")]
+    )
+    client = FakeClient(api_result(parsed))
+
+    result = review_script(source, analysis, client=client)
+
+    envelope = json.loads(client.responses.calls[0]["input"][0]["content"])
+    assert result.succeeded
+    assert envelope["untrusted_source"] == source
+    assert len(result.response.findings) == 2
+    assert (
+        result.response.findings[0].source_reference != result.response.findings[1].source_reference
+    )
 
 
 def test_source_analysis_mismatch_stops_before_client_use(monkeypatch):
@@ -348,15 +408,26 @@ def test_schema_rejects_more_than_three_findings():
 def test_script_fields_are_forbidden_and_items_are_bounded():
     source = "def focused(value=[]):\n    return value\n"
     analysis = analyse_script(source)
-    strategy = response().model_copy(update={"strategy": "Notebook-only strategy."})
-    cells = response().model_copy(update={"affected_cell_keys": ["cell-1"]})
+    evidence = build_evidence_package(analysis)
+    strategy = ReviewResponse(
+        outcome=ReviewOutcome.NO_REFACTOR_NEEDED,
+        summary="Shared response.",
+        findings=[],
+        strategy="Notebook-only strategy.",
+    )
+    cells = ReviewResponse(
+        outcome=ReviewOutcome.NO_REFACTOR_NEEDED,
+        summary="Shared response.",
+        findings=[],
+        affected_cell_keys=["cell-1"],
+    )
 
     assert (
-        review_script(source, analysis, client=FakeClient(api_result(strategy))).error_code
+        ai_module._validate_response(strategy, analysis, evidence, mode=ReviewMode.SCRIPT)[0]
         == "script_field_violation"
     )
     assert (
-        review_script(source, analysis, client=FakeClient(api_result(cells))).error_code
+        ai_module._validate_response(cells, analysis, evidence, mode=ReviewMode.SCRIPT)[0]
         == "script_field_violation"
     )
     with pytest.raises(ValidationError):
@@ -375,6 +446,62 @@ def test_script_fields_are_forbidden_and_items_are_bounded():
         )
 
 
+def test_script_schema_excludes_notebook_fields_and_multi_cell_outcome():
+    assert "strategy" not in ScriptReviewResponse.model_fields
+    assert "affected_cell_keys" not in ScriptReviewResponse.model_fields
+    assert "candidate" not in ScriptReviewResponse.model_fields
+    assert "candidate_source" in ScriptReviewResponse.model_fields
+    assert "entire Python file" in (
+        ScriptReviewResponse.model_fields["candidate_source"].description
+    )
+    assert "never python candidate code" in (
+        Finding.model_fields["source_reference"].description.lower()
+    )
+    with pytest.raises(ValidationError):
+        ScriptReviewResponse.model_validate(
+            {
+                "outcome": "multi_cell_change_required",
+                "summary": "Not a script outcome.",
+                "findings": [],
+            }
+        )
+
+
+def test_shared_schema_retains_notebook_and_evaluation_fields():
+    shared = ReviewResponse(
+        outcome=ReviewOutcome.MULTI_CELL_CHANGE_REQUIRED,
+        summary="Shared notebook response.",
+        findings=[],
+        strategy="Coordinate changes across cells.",
+        affected_cell_keys=["cell-1", "cell-2"],
+    )
+
+    assert shared.strategy == "Coordinate changes across cells."
+    assert shared.affected_cell_keys == ["cell-1", "cell-2"]
+
+
+def test_script_response_normalises_and_passes_grounded_validation():
+    source = "def focused(value=[]):\n    return value\n"
+    analysis = analyse_script(source)
+    finding = finding_for(source, analysis)
+    parsed = response(findings=[finding])
+
+    normalised = normalise_script_response(parsed)
+
+    assert isinstance(normalised, ReviewResponse)
+    assert normalised.strategy is None
+    assert normalised.affected_cell_keys == []
+    assert (
+        ai_module._validate_response(
+            normalised,
+            analysis,
+            build_evidence_package(analysis),
+            mode=ReviewMode.SCRIPT,
+        )
+        is None
+    )
+
+
 @pytest.mark.parametrize(
     ("outcome", "candidate", "error"),
     [
@@ -382,7 +509,6 @@ def test_script_fields_are_forbidden_and_items_are_bounded():
         (ReviewOutcome.REFACTOR_RECOMMENDED, "", "candidate_invariant"),
         (ReviewOutcome.NO_REFACTOR_NEEDED, "x = 1", "candidate_invariant"),
         (ReviewOutcome.INSUFFICIENT_EVIDENCE, "x = 1", "candidate_invariant"),
-        (ReviewOutcome.MULTI_CELL_CHANGE_REQUIRED, None, "mode_violation"),
     ],
 )
 def test_outcome_candidate_invariants(outcome, candidate, error):
@@ -397,6 +523,56 @@ def test_outcome_candidate_invariants(outcome, candidate, error):
 
     assert result.error_code == error
     assert result.original_analysis is analysis
+
+
+def test_shared_multi_cell_outcome_remains_rejected_by_script_validator():
+    source = "def focused(value=[]):\n    return value\n"
+    analysis = analyse_script(source)
+    shared = ReviewResponse(
+        outcome=ReviewOutcome.MULTI_CELL_CHANGE_REQUIRED,
+        summary="Defence in depth.",
+        findings=[],
+    )
+
+    violation = ai_module._validate_response(
+        shared, analysis, build_evidence_package(analysis), mode=ReviewMode.SCRIPT
+    )
+
+    assert violation[0] == "mode_violation"
+
+
+def test_shared_mode_does_not_apply_script_only_field_restrictions():
+    source = "def focused(value=[]):\n    return value\n"
+    analysis = analyse_script(source)
+    shared = ReviewResponse(
+        outcome=ReviewOutcome.MULTI_CELL_CHANGE_REQUIRED,
+        summary="Future notebook-compatible response.",
+        findings=[],
+        strategy="Coordinate selected cells.",
+        affected_cell_keys=["cell-1"],
+    )
+
+    violation = ai_module._validate_response(
+        shared, analysis, build_evidence_package(analysis), mode=ReviewMode.SHARED
+    )
+
+    assert violation is None
+
+
+def test_review_result_enforces_success_and_failure_response_invariants():
+    analysis = analyse_script("def focused(value=[]):\n    return value\n")
+    response_value = ReviewResponse(
+        outcome=ReviewOutcome.NO_REFACTOR_NEEDED,
+        summary="Valid response.",
+        findings=[],
+    )
+
+    with pytest.raises(ValueError, match="successful review requires"):
+        ai_module.ReviewResult(analysis, None, None, None, None, None)
+    with pytest.raises(ValueError, match="failed review cannot contain"):
+        ai_module.ReviewResult(
+            analysis, None, response_value, None, "timeout", "Request timed out."
+        )
 
 
 @pytest.mark.parametrize(
@@ -469,17 +645,12 @@ def test_candidate_absolute_cap_boundaries(offset):
     assert script_candidate_limit(source) == 60_000
     candidate = candidate_of_length(60_000 + offset)
 
-    result = review_script(
-        source,
-        analysis,
-        client=FakeClient(api_result(response(ReviewOutcome.REFACTOR_RECOMMENDED, candidate))),
-    )
+    result = ai_module._verify_candidate(source, candidate, analysis)
 
     if offset <= 0:
-        assert result.succeeded
-        assert result.candidate_verification.character_count == 60_000 + offset
+        assert result.character_count == 60_000 + offset
     else:
-        assert result.error_code == "candidate_too_large"
+        assert result[0] == "candidate_too_large"
 
 
 def test_oversized_candidate_is_rejected_before_syntax_parsing(monkeypatch):
@@ -499,7 +670,7 @@ def test_oversized_candidate_is_rejected_before_syntax_parsing(monkeypatch):
     )
 
     assert result.error_code == "candidate_too_large"
-    assert result.response.candidate == candidate
+    assert result.response is None
 
 
 def test_candidate_syntax_failure_is_explicit_and_not_reanalysed(monkeypatch):
@@ -511,16 +682,77 @@ def test_candidate_syntax_failure_is_explicit_and_not_reanalysed(monkeypatch):
         lambda candidate: pytest.fail("invalid candidate must not be reanalysed"),
     )
 
+    client = FakeClient(api_result(response(ReviewOutcome.REFACTOR_RECOMMENDED, "def broken(:")))
     result = review_script(
         source,
         analysis,
-        client=FakeClient(api_result(response(ReviewOutcome.REFACTOR_RECOMMENDED, "def broken(:"))),
+        client=client,
     )
 
     assert result.succeeded
-    assert not result.candidate_verification.syntax_valid
-    assert result.candidate_verification.analysis is None
-    assert result.candidate_verification.comparison is None
+    assert result.candidate_issue_code == "candidate_syntax_invalid"
+    assert result.response.candidate is None
+    assert result.candidate_verification is None
+    assert len(client.responses.calls) == 2
+
+
+@pytest.mark.parametrize(
+    "invalid_candidate",
+    [
+        "function:summarise:1@L1-L7",
+        "Here is the corrected Python source.",
+        "```python\ndef focused(value=None):\n    return value\n```",
+        "def focused(:\n    return value",
+    ],
+)
+def test_invalid_candidate_forms_fail_one_repair_safely(invalid_candidate):
+    source = "def focused(value=[]):\n    return value\n"
+    first = api_result(response(ReviewOutcome.REFACTOR_RECOMMENDED, invalid_candidate))
+    failed_repair = api_result(CandidateRepairResponse(candidate_source=invalid_candidate))
+    client = SequenceClient(first, failed_repair)
+
+    result = review_script(source, analyse_script(source), client=client)
+
+    assert result.succeeded
+    assert result.candidate_issue_code == "candidate_syntax_invalid"
+    assert result.response.summary == "Grounded review summary."
+    assert result.response.candidate is None
+    assert result.candidate_verification is None
+    assert len(client.responses.calls) == 2
+    assert client.responses.calls[1]["text_format"] is CandidateRepairResponse
+
+
+def test_invalid_candidate_is_repaired_once_and_then_verified():
+    source = "def focused(value=[]):\n    return value\n"
+    repaired = "def focused(value=None):\n    return value\n"
+    first = api_result(
+        response(
+            ReviewOutcome.REFACTOR_RECOMMENDED,
+            "function:focused:1@L1-L2",
+        )
+    )
+    repair = api_result(CandidateRepairResponse(candidate_source=repaired))
+    client = SequenceClient(first, repair)
+
+    result = review_script(source, analyse_script(source), client=client)
+
+    assert result.succeeded
+    assert result.candidate_issue_code is None
+    assert result.response.candidate == repaired
+    assert result.candidate_verification.syntax_valid
+    assert result.candidate_verification.comparison.smells_removed == ("focused:mutable_default",)
+    assert len(client.responses.calls) == 2
+
+
+def test_missing_candidate_fails_without_repair_request():
+    source = "def focused(value=[]):\n    return value\n"
+    client = FakeClient(api_result(response(ReviewOutcome.REFACTOR_RECOMMENDED, None)))
+
+    result = review_script(source, analyse_script(source), client=client)
+
+    assert result.error_code == "candidate_invariant"
+    assert result.response is None
+    assert len(client.responses.calls) == 1
 
 
 def test_valid_candidate_uses_same_analysis_pipeline_and_retains_tests(monkeypatch):

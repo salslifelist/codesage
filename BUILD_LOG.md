@@ -78,3 +78,28 @@ This log records material decisions, verified bootstrap events and milestone out
   fingerprints, canonical individual import bindings and severity-specific smell comparisons.
 - Verified 83 tests, Ruff checks and formatting, dependency consistency and package
   import resolution. No live OpenAI API call was made.
+
+## 19 July 2026 — Script Streamlit interface and mocked integration
+
+- Added a root Streamlit entry point for bounded single-script deterministic analysis and a
+  separately triggered grounded AI review using the existing review boundary.
+- Enforced SHA-256-bound session state, stale-result invalidation and at-most-once review behavior
+  for each analysed source in a session.
+- Added one canonical source-document model for pasted source, UTF-8 Python uploads and bounded
+  public GitHub file URLs, with origin-aware stale-state invalidation and no source persistence.
+- Separated the 200,000-character/byte ingestion limit from the 20,000-character complete-file AI
+  review limit so larger accepted files retain deterministic analysis without truncation.
+- Added safe rendering for deterministic hotspots, grounded findings, candidates, static
+  verification, comparisons, warnings and typed privacy-safe failures without source execution.
+- Added a lean script-only production structured-output schema and normalised successful parses
+  into the shared notebook/evaluation-compatible response model before downstream validation.
+- Clarified the candidate-source contract, added local syntax validation and bounded invalid
+  candidates to one schema-constrained repair attempt with safe partial-review fallback.
+- Made ordinary AI review and candidate comparison explicitly complete-file scoped and extended
+  deterministic evidence with referenceable class inventory.
+- Added the local project requirement to the runtime requirements and verified a clean Python
+  3.11 installation imported CodeSage from isolated `site-packages` with consistent dependencies.
+- Verified 133 tests, Ruff checks and formatting, dependency consistency, package import
+  resolution, secret-file ignores and removal of temporary verification artefacts.
+- No additional live OpenAI API request occurred during the schema correction, and no deployment
+  occurred.

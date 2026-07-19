@@ -76,6 +76,16 @@ def build_evidence_package(analysis: AnalysisResult) -> EvidencePackage:
                     {"severity": smell.severity.value, "message": smell.message},
                 )
             )
+    for definition in sorted(analysis.classes, key=lambda item: (item.line, item.key)):
+        reference = f"{definition.key}@L{definition.line}-L{definition.end_line}"
+        facts.extend(
+            (
+                (reference, "class.qualified_name", definition.qualified_name),
+                (reference, "class.bases", definition.bases),
+                (reference, "class.keywords", definition.keywords),
+                (reference, "class.decorators", definition.decorators),
+            )
+        )
     for position, hotspot in enumerate(analysis.hotspots, start=1):
         facts.append(
             (

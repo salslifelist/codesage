@@ -34,6 +34,12 @@ NO_HOTSPOTS = "NO_HOTSPOTS_ABOVE_THRESHOLDS"
 HOTSPOTS_FOUND = "HOTSPOTS_FOUND"
 SYNTAX_ERROR = "SYNTAX_ERROR"
 
+
+def source_digest(source: str) -> str:
+    """Return the SHA-256 identity of exact UTF-8 source text."""
+    return hashlib.sha256(source.encode("utf-8")).hexdigest()
+
+
 _NESTING_NODES = (
     ast.If,
     ast.For,
@@ -506,14 +512,14 @@ def _hotspot_sort_key(unit: AnalysedUnit) -> tuple[int, int, int, int, int, str]
 def analyse_script(source: str) -> AnalysisResult:
     """Analyse one Python script without importing or executing it."""
     physical_lines = len(source.splitlines())
-    source_digest = hashlib.sha256(source.encode("utf-8")).hexdigest()
+    digest = source_digest(source)
     code_lines = _code_lines(source)
     try:
         module = ast.parse(source)
     except SyntaxError as error:
         return AnalysisResult(
             syntax_valid=False,
-            source_digest=source_digest,
+            source_digest=digest,
             physical_lines=physical_lines,
             sloc=len(code_lines),
             classes=(),
@@ -570,7 +576,7 @@ def analyse_script(source: str) -> AnalysisResult:
     hotspots = tuple(sorted((unit for unit in units if unit.smells), key=_hotspot_sort_key)[:3])
     return AnalysisResult(
         syntax_valid=True,
-        source_digest=source_digest,
+        source_digest=digest,
         physical_lines=physical_lines,
         sloc=len(code_lines),
         classes=tuple(collector.classes),
