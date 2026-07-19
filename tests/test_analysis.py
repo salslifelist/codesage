@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import textwrap
 
 import pytest
@@ -33,6 +34,12 @@ def test_clean_script_returns_explicit_zero_hotspot_result():
     assert result.outcome == NO_HOTSPOTS
     assert result.hotspots == ()
     assert unit(result, "add").complexity == 1
+    assert (
+        result.source_digest
+        == hashlib.sha256(
+            "def add(left, right):\n    return left + right\n".encode("utf-8")
+        ).hexdigest()
+    )
 
 
 def test_syntax_failure_is_reported_without_units():
@@ -44,6 +51,10 @@ def test_syntax_failure_is_reported_without_units():
     assert result.syntax_failure.line == 1
     assert result.classes == ()
     assert result.units == ()
+    assert (
+        result.source_digest
+        == hashlib.sha256("def broken(:\n    pass\n".encode("utf-8")).hexdigest()
+    )
 
 
 def test_sloc_does_not_count_blank_lines_inside_multiline_strings():
@@ -109,6 +120,23 @@ def test_classes_are_structural_inventory_with_qualified_names_and_locations():
     assert unit(result, "TopLevel.Nested.method").kind is UnitKind.METHOD
     class_names = {definition.qualified_name for definition in result.classes}
     assert not class_names & {hotspot.qualified_name for hotspot in result.hotspots}
+
+
+def test_signature_and_import_inventories_are_stable_and_complete():
+    result = analyse_script(
+        "import os as operating_system\n"
+        "from .shared import item as shared_item\n"
+        "def convert(value: int, *, flag=False) -> str:\n"
+        "    import decimal\n"
+        "    return str(value)\n"
+    )
+
+    assert unit(result, "convert").signature == "(value: int, *, flag=False) -> str"
+    assert [(item.module, item.names, item.line) for item in result.imports] == [
+        ("", ("os as operating_system",), 1),
+        (".shared", ("item as shared_item",), 2),
+        ("", ("decimal",), 4),
+    ]
 
 
 def test_radon_matches_every_supported_function_scope():

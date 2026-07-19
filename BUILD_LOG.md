@@ -54,3 +54,27 @@ This log records material decisions, verified bootstrap events and milestone out
   hotspot ordering, three-hotspot limit and zero-hotspot outcome.
 - Verified 29 focused tests, Ruff checks and formatting, dependency consistency and
   package import resolution from `src/codesage`.
+
+## 19 July 2026 — Script AI review and candidate verification
+
+- Added a stable deterministic evidence package with versioned prompts, unique evidence
+  IDs, source references, thresholds, measurements, smells and hotspot-selection facts.
+- Added a strict, injectable Responses API boundary with bounded output and timeout,
+  disabled retries, no tools, no storage and mocked automated tests only.
+- Added script outcome, evidence-reference and zero-hotspot validation, preserving the
+  original deterministic analysis for every handled AI failure.
+- Bound reviews to the exact SHA-256 source digest, rejected syntax-invalid originals
+  before client creation and used a deterministic collision-safe JSON data envelope.
+- Bound each cited evidence ID to its source reference and completed terminal-status,
+  script-field and privacy-safe failure validation without exposing raw API or structured-output
+  exception details.
+- Kept one response schema reusable for grounded and ungrounded evaluation while requiring
+  complete deterministic grounding references in production review.
+- Added exact candidate-size enforcement, syntax checking, same-pipeline reanalysis and
+  separate directional, descriptive and structural comparisons without execution or an
+  overall verdict.
+- Extended deterministic inventory with signatures and imports for exact function,
+  method, class, signature and import change reporting, including structural
+  fingerprints, canonical individual import bindings and severity-specific smell comparisons.
+- Verified 83 tests, Ruff checks and formatting, dependency consistency and package
+  import resolution. No live OpenAI API call was made.

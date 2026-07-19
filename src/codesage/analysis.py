@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import hashlib
 import io
 import tokenize
 from collections.abc import Iterable
@@ -13,6 +14,7 @@ from codesage.models import (
     AnalysedUnit,
     AnalysisResult,
     ClassDefinition,
+    ImportDefinition,
     Severity,
     Smell,
     SyntaxFailure,
@@ -84,7 +86,7 @@ class _FunctionCollector(ast.NodeVisitor):
     def __init__(self) -> None:
         self.scope: list[tuple[str, str]] = []
         self.functions: list[
-            tuple[ast.FunctionDef | ast.AsyncFunctionDef, str, UnitKind, bool]
+            tuple[ast.FunctionDef | ast.AsyncFunctionDef, str, UnitKind, bool, str | None]
         ] = []
         self.classes: list[ClassDefinition] = []
 
@@ -96,6 +98,14 @@ class _FunctionCollector(ast.NodeVisitor):
                 qualified_name=qualified_name,
                 line=node.lineno,
                 end_line=node.end_lineno or node.lineno,
+                bases=tuple(ast.unparse(base) for base in node.bases),
+                keywords=tuple(
+                    f"{keyword.arg}={ast.unparse(keyword.value)}"
+                    if keyword.arg is not None
+                    else f"**{ast.unparse(keyword.value)}"
+                    for keyword in node.keywords
+                ),
+                decorators=tuple(ast.unparse(item) for item in node.decorator_list),
             )
         )
         self.scope.append((node.name, "class"))
@@ -112,8 +122,16 @@ class _FunctionCollector(ast.NodeVisitor):
         qualified_name = ".".join([*(name for name, _ in self.scope), node.name])
         parent_kind = self.scope[-1][1] if self.scope else None
         kind = UnitKind.METHOD if parent_kind == "class" else UnitKind.FUNCTION
-        exclude_receiver = kind is UnitKind.METHOD and not _has_decorator(node, "staticmethod")
-        self.functions.append((node, qualified_name, kind, exclude_receiver))
+        method_kind: str | None = None
+        if kind is UnitKind.METHOD:
+            if _has_decorator(node, "staticmethod"):
+                method_kind = "static"
+            elif _has_decorator(node, "classmethod"):
+                method_kind = "class"
+            else:
+                method_kind = "instance"
+        exclude_receiver = kind is UnitKind.METHOD and method_kind != "static"
+        self.functions.append((node, qualified_name, kind, exclude_receiver, method_kind))
         self.scope.append((node.name, "function"))
         self.generic_visit(node)
         self.scope.pop()
@@ -196,6 +214,13 @@ def _effective_parameter_count(
         + int(arguments.vararg is not None)
         + int(arguments.kwarg is not None)
     )
+
+
+def _function_signature(function: ast.FunctionDef | ast.AsyncFunctionDef) -> str:
+    signature = f"({ast.unparse(function.args)})"
+    if function.returns is not None:
+        signature += f" -> {ast.unparse(function.returns)}"
+    return signature
 
 
 def _boolean_leaves(node: ast.AST) -> int:
@@ -423,8 +448,41 @@ def _procedural_module_unit(module: ast.Module, code_lines: set[int]) -> Analyse
         complexity_rank=None,
         nesting_depth=None,
         parameter_count=None,
+        signature=None,
+        definition_kind=None,
+        method_kind=None,
+        decorators=(),
         smells=tuple(smells),
     )
+
+
+def _import_inventory(module: ast.Module) -> tuple[ImportDefinition, ...]:
+    imports: list[ImportDefinition] = []
+    for node in ast.walk(module):
+        if isinstance(node, ast.Import):
+            module_name = ""
+            names = tuple(
+                alias.name if alias.asname is None else f"{alias.name} as {alias.asname}"
+                for alias in node.names
+            )
+        elif isinstance(node, ast.ImportFrom):
+            module_name = f"{'.' * node.level}{node.module or ''}"
+            names = tuple(
+                alias.name if alias.asname is None else f"{alias.name} as {alias.asname}"
+                for alias in node.names
+            )
+        else:
+            continue
+        rendered = f"{module_name}:{','.join(names)}"
+        imports.append(
+            ImportDefinition(
+                key=f"import:{node.lineno}:{rendered}",
+                module=module_name,
+                names=names,
+                line=node.lineno,
+            )
+        )
+    return tuple(sorted(imports, key=lambda item: (item.line, item.key)))
 
 
 def _severity_value(smells: Iterable[Smell]) -> int:
@@ -448,15 +506,18 @@ def _hotspot_sort_key(unit: AnalysedUnit) -> tuple[int, int, int, int, int, str]
 def analyse_script(source: str) -> AnalysisResult:
     """Analyse one Python script without importing or executing it."""
     physical_lines = len(source.splitlines())
+    source_digest = hashlib.sha256(source.encode("utf-8")).hexdigest()
     code_lines = _code_lines(source)
     try:
         module = ast.parse(source)
     except SyntaxError as error:
         return AnalysisResult(
             syntax_valid=False,
+            source_digest=source_digest,
             physical_lines=physical_lines,
             sloc=len(code_lines),
             classes=(),
+            imports=(),
             units=(),
             hotspots=(),
             outcome=SYNTAX_ERROR,
@@ -468,7 +529,7 @@ def analyse_script(source: str) -> AnalysisResult:
     complexities = _radon_complexities(source)
     units: list[AnalysedUnit] = []
     analysis_warnings: list[str] = []
-    for function, qualified_name, kind, exclude_receiver in collector.functions:
+    for function, qualified_name, kind, exclude_receiver, method_kind in collector.functions:
         sloc = len(_lines_for_node(function, code_lines))
         complexity = complexities.get((function.lineno, function.name))
         if complexity is None:
@@ -491,6 +552,10 @@ def analyse_script(source: str) -> AnalysisResult:
                 complexity_rank=cc_rank(complexity) if complexity is not None else None,
                 nesting_depth=nesting,
                 parameter_count=parameters,
+                signature=_function_signature(function),
+                definition_kind=("async" if isinstance(function, ast.AsyncFunctionDef) else "sync"),
+                method_kind=method_kind,
+                decorators=tuple(ast.unparse(item) for item in function.decorator_list),
                 smells=_function_smells(
                     function,
                     sloc=sloc,
@@ -505,9 +570,11 @@ def analyse_script(source: str) -> AnalysisResult:
     hotspots = tuple(sorted((unit for unit in units if unit.smells), key=_hotspot_sort_key)[:3])
     return AnalysisResult(
         syntax_valid=True,
+        source_digest=source_digest,
         physical_lines=physical_lines,
         sloc=len(code_lines),
         classes=tuple(collector.classes),
+        imports=_import_inventory(module),
         units=tuple(units),
         hotspots=hotspots,
         outcome=HOTSPOTS_FOUND if hotspots else NO_HOTSPOTS,

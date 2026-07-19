@@ -39,6 +39,10 @@ class AnalysedUnit:
     complexity_rank: str | None
     nesting_depth: int | None
     parameter_count: int | None
+    signature: str | None
+    definition_kind: str | None
+    method_kind: str | None
+    decorators: tuple[str, ...]
     smells: tuple[Smell, ...]
 
 
@@ -55,14 +59,27 @@ class ClassDefinition:
     qualified_name: str
     line: int
     end_line: int
+    bases: tuple[str, ...]
+    keywords: tuple[str, ...]
+    decorators: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class ImportDefinition:
+    key: str
+    module: str
+    names: tuple[str, ...]
+    line: int
 
 
 @dataclass(frozen=True, slots=True)
 class AnalysisResult:
     syntax_valid: bool
+    source_digest: str
     physical_lines: int
     sloc: int
     classes: tuple[ClassDefinition, ...]
+    imports: tuple[ImportDefinition, ...]
     units: tuple[AnalysedUnit, ...]
     hotspots: tuple[AnalysedUnit, ...]
     outcome: str
