@@ -34,7 +34,23 @@ This log records material decisions, verified bootstrap events and milestone out
 
 ## Current state
 
+- The private GitHub repository exists, and local `main` tracks `origin/main` at the
+  verified bootstrap commit.
+- The deterministic script-analysis milestone is implemented as uncommitted changes.
 - No files are staged.
-- No commits or remotes exist at this stage.
-- No application implementation, deployment or live-model evaluation has begun.
+- No deployment or live-model evaluation has begun.
 - `/feedback` has not been run.
+
+## 19 July 2026 — Deterministic script-analysis vertical slice
+
+- Added a genuine `src/codesage` package with setuptools package discovery and an
+  editable installation in the approved Python 3.11 environment.
+- Implemented non-executing AST analysis for syntax status, SLOC, qualified functions
+  and methods, statement counts, effective parameters, nesting, Boolean leaves,
+  mutable defaults, exception handling and Radon cyclomatic complexity.
+- Implemented procedural module SLOC and direct-statement measurement with imports,
+  the recognised docstring and complete nested definitions excluded.
+- Implemented the approved smell thresholds, explicit severities, deterministic
+  hotspot ordering, three-hotspot limit and zero-hotspot outcome.
+- Verified 29 focused tests, Ruff checks and formatting, dependency consistency and
+  package import resolution from `src/codesage`.
