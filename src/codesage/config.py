@@ -1,5 +1,61 @@
 """Canonical bounded product configuration for the CodeSage script MVP."""
 
+from __future__ import annotations
+
+import hmac
+import os
+from collections.abc import Mapping
+from dataclasses import dataclass
+
+
+AI_ENABLED_VALUES = frozenset({"1", "true", "yes", "on"})
+
+
+@dataclass(frozen=True)
+class AIAccessConfiguration:
+    """Non-secret availability facts for hosted AI features."""
+
+    enabled: bool
+    access_code_configured: bool
+    api_key_configured: bool
+    model: str | None
+
+    @property
+    def available(self) -> bool:
+        """Return whether a browser session may attempt to unlock AI features."""
+        return self.enabled and self.access_code_configured and self.api_key_configured
+
+
+def read_ai_access_configuration(
+    environ: Mapping[str, str] | None = None,
+) -> AIAccessConfiguration:
+    """Read hosted-AI availability without retaining either configured secret."""
+    values = os.environ if environ is None else environ
+    enabled = values.get("AI_ENABLED", "").strip().lower() in AI_ENABLED_VALUES
+    access_code = values.get("JUDGE_ACCESS_CODE", "")
+    api_key = values.get("OPENAI_API_KEY", "")
+    model = values.get("OPENAI_MODEL", "").strip() or None
+    return AIAccessConfiguration(
+        enabled=enabled,
+        access_code_configured=bool(access_code.strip()),
+        api_key_configured=bool(api_key.strip()),
+        model=model,
+    )
+
+
+def verify_judge_access_code(
+    submitted_code: str,
+    environ: Mapping[str, str] | None = None,
+) -> bool:
+    """Compare a submitted code in constant time when hosted AI is configured."""
+    values = os.environ if environ is None else environ
+    configuration = read_ai_access_configuration(values)
+    expected_code = values.get("JUDGE_ACCESS_CODE", "")
+    if not configuration.available or not submitted_code:
+        return False
+    return hmac.compare_digest(submitted_code, expected_code)
+
+
 PASTED_SOURCE_CHARACTER_LIMIT = 200_000
 SOURCE_RESPONSE_BYTE_LIMIT = 200_000
 DECODED_SOURCE_CHARACTER_LIMIT = 200_000

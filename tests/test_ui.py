@@ -70,6 +70,13 @@ from codesage.ui import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _authorise_existing_ui_scenarios(monkeypatch):
+    """Keep established UI tests focused on behaviour beyond the separately tested gate."""
+    monkeypatch.setattr(app, "render_judge_ai_access", lambda state, configuration=None: True)
+    monkeypatch.setattr(app, "ai_access_is_granted", lambda state, configuration=None: True)
+
+
 def hotspot_source(name="focused"):
     return f"def {name}(value=[]):\n    return value\n"
 

@@ -18,9 +18,12 @@ from codesage.ai import (
     refactor_availability,
 )
 from codesage.config import (
+    AIAccessConfiguration,
     COACH_MESSAGE_CHARACTER_LIMIT,
     PRINT_COMPLETE_SOURCE_CHARACTER_LIMIT,
     REFACTOR_INSTRUCTION_CHARACTER_LIMIT,
+    read_ai_access_configuration,
+    verify_judge_access_code,
 )
 from codesage.evidence import THRESHOLDS
 from codesage.models import AnalysisResult
@@ -77,6 +80,8 @@ WORKSPACE_VIEW_STATE_KEY = "workspace_view"
 WORKSPACE_VIEW_WIDGET_KEY = "_workspace_view_selector"
 SCROLL_TO_TOP_KEY = "scroll_to_codesage_top"
 SCROLL_SCRIPT_VARIANT_KEY = "_scroll_to_codesage_top_variant"
+JUDGE_AI_ACCESS_GRANTED_KEY = "judge_ai_access_granted"
+JUDGE_ACCESS_CODE_WIDGET_KEY = "_judge_access_code_input"
 SOURCE_ROUTES = ("Paste code", "Upload .py file", "Public GitHub .py URL", EXAMPLE_MODE)
 WORKSPACE_VIEWS = ("Overview", "AI review", "Refactor", "Measurements & evidence")
 WORKSPACE_VIEW_ALIASES = {"Technical details": "Measurements & evidence"}
@@ -1246,6 +1251,89 @@ def _render_action_errors(state) -> None:
                 render_safe_error_detail(alternative_error)
 
 
+def ai_access_is_granted(state, configuration: AIAccessConfiguration | None = None) -> bool:
+    """Return whether this browser session may use the configured hosted AI."""
+    current = configuration or read_ai_access_configuration()
+    return current.available and state.get(JUDGE_AI_ACCESS_GRANTED_KEY) is True
+
+
+def authorise_judge_ai_access(state, submitted_code: str, *, verifier=None) -> bool:
+    """Store only a session Boolean after a successful access-code comparison."""
+    check = verify_judge_access_code if verifier is None else verifier
+    if not check(submitted_code):
+        return False
+    state[JUDGE_AI_ACCESS_GRANTED_KEY] = True
+    return True
+
+
+def render_judge_ai_access(state, configuration: AIAccessConfiguration | None = None) -> bool:
+    """Render the shared judging gate and return the current session authorisation."""
+    current = configuration or read_ai_access_configuration()
+    if not current.enabled:
+        st.info(
+            "Hosted AI features are temporarily unavailable. Deterministic analysis remains "
+            "available."
+        )
+        return False
+    if not current.available:
+        st.info("Hosted AI features are not configured. Deterministic analysis remains available.")
+        return False
+    if ai_access_is_granted(state, current):
+        st.success("AI features are unlocked for this session.")
+        return True
+
+    with st.container(border=True):
+        st.markdown("### Judge AI access")
+        st.write(
+            "Enter the judging access code to use hosted AI features. Deterministic analysis "
+            "remains publicly available."
+        )
+        with st.form("judge_ai_access", clear_on_submit=True):
+            submitted_code = st.text_input(
+                "Access code",
+                type="password",
+                key=JUDGE_ACCESS_CODE_WIDGET_KEY,
+            )
+            submitted = st.form_submit_button("Unlock AI features", type="primary")
+        if submitted:
+            if authorise_judge_ai_access(state, submitted_code):
+                st.rerun()
+            else:
+                st.error("The access code was not recognised.")
+    return False
+
+
+def request_ai_review(state, document: SourceDocument) -> str | None:
+    """Call the existing review handler only for an authorised browser session."""
+    if not ai_access_is_granted(state):
+        return "Unlock AI features before requesting an AI review."
+    return handle_actions(
+        state,
+        document,
+        analyse_clicked=False,
+        review_clicked=True,
+    )
+
+
+def request_suggested_refactor(
+    state,
+    document: SourceDocument,
+    *,
+    optional_instructions: str,
+    on_correction_start,
+) -> str | None:
+    """Call the existing refactor handler only for an authorised browser session."""
+    if not ai_access_is_granted(state):
+        return "Unlock AI features before generating a suggested refactor."
+    return handle_refactor_action(
+        state,
+        document,
+        refactor_clicked=True,
+        optional_instructions=optional_instructions,
+        on_correction_start=on_correction_start,
+    )
+
+
 def render_review_action(document: SourceDocument, state, *, empty_state: bool = False) -> None:
     """Render the shared explicit review action in an eligible workspace view."""
     analysis = state[ANALYSIS_KEY]
@@ -1254,6 +1342,8 @@ def render_review_action(document: SourceDocument, state, *, empty_state: bool =
         return
     if not document.ai_eligible:
         st.info("This script is available for deterministic analysis only.")
+        return
+    if not render_judge_ai_access(state):
         return
     with st.container(border=True):
         if empty_state:
@@ -1282,12 +1372,7 @@ def render_review_action(document: SourceDocument, state, *, empty_state: bool =
         action_slot = st.empty()
         if action_slot.button("Get AI review", type="primary"):
             with st.spinner("Getting AI maintainability review…"):
-                action_error = handle_actions(
-                    state,
-                    document,
-                    analyse_clicked=False,
-                    review_clicked=True,
-                )
+                action_error = request_ai_review(state, document)
             if action_error:
                 st.error(action_error)
             elif REVIEW_KEY in state and REVIEW_ERROR_KEY not in state:
@@ -1308,6 +1393,8 @@ def render_refactor_action(
     review = state.get(REVIEW_KEY)
     decision = refactor_availability(review)
     if decision.status is not RefactorAvailabilityStatus.AVAILABLE:
+        return
+    if not render_judge_ai_access(state):
         return
     with st.container(border=True):
         if empty_state:
@@ -1368,10 +1455,9 @@ def render_refactor_action(
             key="try_different_refactor" if alternative else "generate_suggested_refactor",
         ):
             with st.spinner("Generating and checking the suggested refactor…"):
-                action_error = handle_refactor_action(
+                action_error = request_suggested_refactor(
                     state,
                     document,
-                    refactor_clicked=True,
                     optional_instructions=optional_instructions,
                     on_correction_start=lambda _: st.info(
                         "The first generated version could not be verified. CodeSage is trying "
@@ -1388,6 +1474,8 @@ def render_refactor_action(
 
 def submit_coach_question(state, document: SourceDocument, *, question: str) -> None:
     """Make exactly one explicit "Ask CodeSage" request for this question."""
+    if not ai_access_is_granted(state):
+        return
     handle_coach_chat_action(state, document, message=question, submit_clicked=True)
 
 
@@ -1400,6 +1488,8 @@ def render_ask_codesage(document: SourceDocument, state) -> None:
     """
     review = state.get(REVIEW_KEY)
     if review is None or not review.succeeded:
+        return
+    if not render_judge_ai_access(state):
         return
     refactor = state.get(REFACTOR_KEY)
     refactor_available = classify_refactor_result(refactor) is RefactorResultState.VERIFIED_REFACTOR
