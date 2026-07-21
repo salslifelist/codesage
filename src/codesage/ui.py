@@ -4,14 +4,19 @@ from __future__ import annotations
 
 from collections.abc import Callable, MutableMapping
 from dataclasses import dataclass
+from enum import StrEnum
 import re
 from typing import Any
 
 from codesage.ai import (
+    CoachMessage,
+    CoachResult,
     RefactorResult,
+    RefactorAvailabilityStatus,
     ReviewResult,
+    ask_coach,
     generate_script_refactor,
-    review_allows_refactor,
+    refactor_availability,
     review_script,
 )
 from codesage.analysis import analyse_script
@@ -40,14 +45,50 @@ REVIEW_ERROR_KEY = "script_review_error"
 REFACTOR_KEY = "script_refactor"
 REFACTOR_REQUEST_KEY = "script_refactor_request_identity"
 REFACTOR_ERROR_KEY = "script_refactor_error"
+ALTERNATIVE_REFACTOR_ERROR_KEY = "script_alternative_refactor_error"
 REFACTOR_INSTRUCTIONS_KEY = "script_refactor_instructions"
 SOURCE_KEY = "active_source_document"
 SOURCE_MODE_KEY = "source_input_mode"
 EXAMPLE_MODE = "Built-in example"
 
+COACH_CHAT_KEY = "codesage_coach_chat"
+COACH_CHAT_ERROR_KEY = "codesage_coach_chat_error"
+COACH_CHAT_CONTEXT_KEY = "codesage_coach_chat_context_identity"
+
 ReviewFunction = Callable[..., ReviewResult]
 RefactorFunction = Callable[..., RefactorResult]
+CoachFunction = Callable[..., CoachResult]
 NOT_APPLICABLE = "—"
+
+
+class RefactorResultState(StrEnum):
+    """User-relevant state of the stored refactor result."""
+
+    VERIFIED_REFACTOR = "verified_refactor"
+    MODEL_ABSTAINED = "model_abstained"
+    UNAVAILABLE_OR_INVALID = "unavailable_or_invalid"
+    NO_RESULT = "no_result"
+
+
+def classify_refactor_result(value: object | None) -> RefactorResultState:
+    """Classify a stored value without treating mere key presence as verified code."""
+    if value is None:
+        return RefactorResultState.NO_RESULT
+    if not isinstance(value, RefactorResult):
+        return RefactorResultState.UNAVAILABLE_OR_INVALID
+    if value.abstained:
+        return RefactorResultState.MODEL_ABSTAINED
+    verification = value.verification
+    if (
+        value.succeeded
+        and value.suggested_refactor is not None
+        and verification is not None
+        and verification.analysis is not None
+        and verification.comparison is not None
+        and verification.syntax_valid
+    ):
+        return RefactorResultState.VERIFIED_REFACTOR
+    return RefactorResultState.UNAVAILABLE_OR_INVALID
 
 
 def _document(source: SourceDocument | str) -> SourceDocument:
@@ -63,9 +104,20 @@ def _clear_source_results(state: MutableMapping[str, Any]) -> None:
         REFACTOR_KEY,
         REFACTOR_REQUEST_KEY,
         REFACTOR_ERROR_KEY,
+        ALTERNATIVE_REFACTOR_ERROR_KEY,
         REFACTOR_INSTRUCTIONS_KEY,
+        COACH_CHAT_KEY,
+        COACH_CHAT_ERROR_KEY,
+        COACH_CHAT_CONTEXT_KEY,
     ):
         state.pop(key, None)
+
+
+def clear_coach_chat(state: MutableMapping[str, Any]) -> None:
+    """Explicitly clear the current Ask CodeSage conversation only."""
+    state.pop(COACH_CHAT_KEY, None)
+    state.pop(COACH_CHAT_ERROR_KEY, None)
+    state.pop(COACH_CHAT_CONTEXT_KEY, None)
 
 
 def invalidate_stale_state(
@@ -87,13 +139,20 @@ def invalidate_stale_state(
     review = state.get(REVIEW_KEY)
     if review is not None and review.original_analysis.source_digest != document.source_digest:
         _clear_source_results(state)
+        return
+    refactor = state.get(REFACTOR_KEY)
+    if (
+        isinstance(refactor, RefactorResult)
+        and refactor.original_analysis.source_digest != document.source_digest
+    ):
+        _clear_source_results(state)
 
 
 def load_example(state: MutableMapping[str, Any]) -> SourceDocument:
     """Select the canonical example and invalidate results belonging to another source."""
     document = normalise_example_source()
     invalidate_stale_state(state, document)
-    state[SOURCE_MODE_KEY] = EXAMPLE_MODE
+    state[SOURCE_KEY] = document
     return document
 
 
@@ -114,8 +173,13 @@ def workflow_statuses(state: MutableMapping[str, Any]) -> tuple[str, str, str]:
     analysis = state.get(ANALYSIS_KEY)
     document = state.get(SOURCE_KEY)
     analysis_complete = analysis is not None
-    review_complete = REVIEW_KEY in state
-    refactor_complete = REFACTOR_KEY in state
+    review = state.get(REVIEW_KEY)
+    review_complete = isinstance(review, ReviewResult) and review.succeeded
+    stored_refactor = state.get(REFACTOR_KEY)
+    decision = refactor_availability(
+        review if review is not None else state.get(REVIEW_ERROR_KEY),
+        stored_refactor if isinstance(stored_refactor, RefactorResult) else None,
+    )
     review_available = bool(
         analysis is not None
         and analysis.syntax_valid
@@ -127,19 +191,13 @@ def workflow_statuses(state: MutableMapping[str, Any]) -> tuple[str, str, str]:
         (
             "Complete"
             if review_complete
-            else "Available"
+            else "Optional AI review available"
             if review_available
             else "After valid analysis"
+            if analysis is None
+            else "Unavailable for this source"
         ),
-        (
-            "Complete"
-            if refactor_complete
-            else "Available"
-            if review_complete and review_allows_refactor(state[REVIEW_KEY])
-            else "Not offered"
-            if review_complete
-            else "After AI review"
-        ),
+        decision.label,
     )
 
 
@@ -164,6 +222,8 @@ def handle_actions(
         state.pop(REFACTOR_KEY, None)
         state.pop(REFACTOR_REQUEST_KEY, None)
         state.pop(REFACTOR_ERROR_KEY, None)
+        state.pop(ALTERNATIVE_REFACTOR_ERROR_KEY, None)
+        clear_coach_chat(state)
 
     if review_clicked:
         analysis = state.get(ANALYSIS_KEY)
@@ -196,7 +256,12 @@ def handle_refactor_action(
     refactorer: RefactorFunction = generate_script_refactor,
     on_correction_start: Callable[[str], None] | None = None,
 ) -> str | None:
-    """Generate or replace one verified refactor without disturbing a cached review."""
+    """Generate the current refactor, or replace it with a distinct alternative.
+
+    A request is treated as an alternative exactly when a verified refactor is already
+    stored in REFACTOR_KEY. An alternative's failure never disturbs that existing verified
+    refactor: it is recorded separately under ALTERNATIVE_REFACTOR_ERROR_KEY.
+    """
     document = _document(source)
     invalidate_stale_state(state, document)
     if not refactor_clicked:
@@ -205,28 +270,121 @@ def handle_refactor_action(
     review = state.get(REVIEW_KEY)
     if analysis is None or review is None:
         return "Get an AI review for the current source before generating a refactor."
-    if not review_allows_refactor(review):
-        return "This AI review does not recommend a supported refactor."
+    decision = refactor_availability(review)
+    if decision.status is not RefactorAvailabilityStatus.AVAILABLE:
+        return decision.explanation
+    normalised_instructions = optional_instructions.strip()
     request_identity = (
         document.identity,
         review.response.model_dump_json() if review.response is not None else "",
-        optional_instructions,
+        normalised_instructions,
     )
-    if state.get(REFACTOR_REQUEST_KEY) == request_identity and REFACTOR_KEY in state:
+    cached_state = classify_refactor_result(state.get(REFACTOR_KEY))
+    if state.get(REFACTOR_REQUEST_KEY) == request_identity and cached_state in {
+        RefactorResultState.VERIFIED_REFACTOR,
+        RefactorResultState.MODEL_ABSTAINED,
+    }:
         return None
-    result = refactorer(
-        document.text,
-        analysis,
-        review,
-        optional_instructions=optional_instructions,
-        on_correction_start=on_correction_start,
+    existing_refactor = state.get(REFACTOR_KEY)
+    is_alternative = (
+        classify_refactor_result(existing_refactor) is RefactorResultState.VERIFIED_REFACTOR
     )
-    if result.succeeded:
+    if is_alternative:
+        state.pop(ALTERNATIVE_REFACTOR_ERROR_KEY, None)
+    else:
+        state.pop(REFACTOR_KEY, None)
+        state.pop(REFACTOR_ERROR_KEY, None)
+        state.pop(ALTERNATIVE_REFACTOR_ERROR_KEY, None)
+    call_kwargs: dict[str, Any] = {
+        "optional_instructions": normalised_instructions,
+        "on_correction_start": on_correction_start,
+    }
+    if (
+        is_alternative
+        and isinstance(existing_refactor, RefactorResult)
+        and existing_refactor.suggested_refactor is not None
+    ):
+        call_kwargs["previous_suggestion"] = existing_refactor.suggested_refactor
+    result = refactorer(document.text, analysis, review, **call_kwargs)
+    if result.error_code is None:
         state[REFACTOR_KEY] = result
         state[REFACTOR_REQUEST_KEY] = request_identity
         state.pop(REFACTOR_ERROR_KEY, None)
+        state.pop(ALTERNATIVE_REFACTOR_ERROR_KEY, None)
+        clear_coach_chat(state)
+    elif is_alternative:
+        state[ALTERNATIVE_REFACTOR_ERROR_KEY] = result
     else:
         state[REFACTOR_ERROR_KEY] = result
+    return None
+
+
+def _coach_context_identity(
+    state: MutableMapping[str, Any], document: SourceDocument
+) -> tuple[Any, ...]:
+    """Identify the exact source, review and refactor a chat answer depends on."""
+    review = state.get(REVIEW_KEY)
+    refactor = state.get(REFACTOR_KEY)
+    return (
+        document.identity,
+        review.response.model_dump_json()
+        if review is not None and review.response is not None
+        else None,
+        refactor.suggested_refactor
+        if classify_refactor_result(refactor) is RefactorResultState.VERIFIED_REFACTOR
+        else None,
+    )
+
+
+def coach_starter_questions(*, refactor_available: bool) -> tuple[str, ...]:
+    """Return the optional starter questions appropriate to the current result state."""
+    base = (
+        "Explain the highest-priority finding more simply.",
+        "Why does this issue matter?",
+        "What should I test before changing the code?",
+        "Explain the before-and-after measurements.",
+        "What could CodeSage not verify?",
+    )
+    if not refactor_available:
+        return base
+    return base + (
+        "Explain what changed in the refactor.",
+        "Why did this measurement remain unchanged?",
+        "Could this interface change affect callers?",
+        "Why was a different refactor rejected?",
+    )
+
+
+def handle_coach_chat_action(
+    state: MutableMapping[str, Any],
+    source: SourceDocument | str,
+    *,
+    message: str,
+    submit_clicked: bool,
+    asker: CoachFunction = ask_coach,
+) -> str | None:
+    """Answer one explicit "Ask CodeSage" question. Makes an API request only on submission."""
+    document = _document(source)
+    if not submit_clicked:
+        return None
+    analysis = state.get(ANALYSIS_KEY)
+    review = state.get(REVIEW_KEY)
+    if analysis is None or review is None or not review.succeeded:
+        return "Get a successful AI review before asking CodeSage about this result."
+    identity = _coach_context_identity(state, document)
+    if state.get(COACH_CHAT_CONTEXT_KEY) not in (None, identity):
+        clear_coach_chat(state)
+    state[COACH_CHAT_CONTEXT_KEY] = identity
+    history: tuple[CoachMessage, ...] = tuple(state.get(COACH_CHAT_KEY, ()))
+    refactor = state.get(REFACTOR_KEY)
+    result = asker(document.text, analysis, review, refactor, history, message)
+    if result.succeeded:
+        assert result.message is not None
+        user_message = CoachMessage("user", message.strip())
+        state[COACH_CHAT_KEY] = (*history, user_message, result.message)
+        state.pop(COACH_CHAT_ERROR_KEY, None)
+    else:
+        state[COACH_CHAT_ERROR_KEY] = result
     return None
 
 
@@ -310,10 +468,22 @@ def structural_rows(items: tuple[Any, ...]) -> list[dict[str, str]]:
 
 def refactor_action_label(state: MutableMapping[str, Any]) -> str:
     """Return the accessible action for the current verified-refactor state."""
-    return "Try a different refactor" if REFACTOR_KEY in state else "Generate suggested refactor"
+    return (
+        "Generate a different refactor"
+        if classify_refactor_result(state.get(REFACTOR_KEY))
+        is RefactorResultState.VERIFIED_REFACTOR
+        else "Generate suggested refactor"
+    )
+
+
+_OUTCOME_LABELS = {
+    "refactor_recommended": "Maintainability opportunity identified",
+}
 
 
 def readable_outcome(value: str) -> str:
+    if value in _OUTCOME_LABELS:
+        return _OUTCOME_LABELS[value]
     return value.replace("_", " ").capitalize()
 
 
@@ -553,7 +723,14 @@ FAILURE_MESSAGES = {
     "duplicate_evidence_id": "The model response repeated a deterministic evidence reference.",
     "evidence_source_mismatch": "The AI response linked a finding to the wrong code location.",
     "missing_recommendation": "The AI response did not provide a supported recommendation.",
+    "unsupported_refactor_recommendation": (
+        "The AI review recommended a refactor but did not provide the grounded target evidence "
+        "required to offer one."
+    ),
     "refactor_not_available": "This review does not recommend a supported refactor.",
+    "refactor_missing_smell_evidence": (
+        "The reviewed finding for this hotspot did not cite a measured maintainability smell."
+    ),
     "instructions_too_long": "Optional instructions are too long.",
     "candidate_too_large": "The generated refactor exceeded the permitted size.",
     "candidate_syntax_invalid": "The generated refactor was not valid Python.",
@@ -571,6 +748,9 @@ FAILURE_MESSAGES = {
         "The generated refactor introduced unsupported runtime code generation."
     ),
     "target_scope_violation": "The generated refactor exceeded the recommended change scope.",
+    "target_implementation_unchanged": (
+        "The generated version did not change the reviewed target implementation."
+    ),
     "complete_file_structure_unverified": (
         "CodeSage could not verify the complete static file structure."
     ),
@@ -583,6 +763,12 @@ FAILURE_MESSAGES = {
     ),
     "replacement_target_mismatch": "The generated replacement named a different target.",
     "reconstruction_failed": "CodeSage could not insert the generated replacement reliably.",
+    "alternative_not_different": (
+        "The generated replacement was identical to the current verified refactor."
+    ),
+    "coach_source_mismatch": "The source changed. Analyse it again before asking a question.",
+    "empty_message": "Enter a question before sending.",
+    "message_too_long": "Questions are too long.",
 }
 
 

@@ -8,6 +8,7 @@ import pytest
 from codesage.ai import (
     CorrectionStatus,
     Finding,
+    RefactorDecisionOutcome,
     ReviewOutcome,
     ReviewResponse,
     ReviewResult,
@@ -107,7 +108,7 @@ VALID_BODY_CHANGE = ORIGINAL.replace(
     "    for value in values:\n        if value:\n            return value\n",
     "    for value in values:\n        if value is not None:\n            return value\n",
 )
-VALID_REPLACEMENT = """def choose_priority_item(values=[]):
+VALID_REPLACEMENT = """def choose_priority_item(values=None):
     for value in values:
         if value is not None:
             return value
@@ -121,7 +122,18 @@ def test_focused_target_body_change_preserves_unrelated_static_structure():
     assert result.syntax_valid
     assert result.target_names == ("choose_priority_item",)
     assert result.comparison is not None
+    implementation = next(
+        item
+        for item in result.comparison.structural
+        if item.category == "implementation" and item.name == "choose_priority_item"
+    )
+    assert implementation.status.value == "changed"
     assert "behavioural equivalence" in result.non_equivalence_notice
+
+
+def test_unchanged_target_ast_is_rejected_explicitly():
+    result = verify(ORIGINAL)
+    assert result[0] == "target_implementation_unchanged"
 
 
 def test_supported_mutable_default_change_is_allowed_and_reported():
@@ -234,8 +246,10 @@ def test_full_module_response_gets_one_target_only_correction_and_records_both_o
     client = FakeClient(
         api_result(
             ScriptRefactorResponse(
+                outcome=RefactorDecisionOutcome.SUGGESTED_REFACTOR,
                 target_source_reference=reference,
                 replacement_source=invalid,
+                decision_reason="This approach should improve the reviewed issue.",
             )
         ),
         api_result(
@@ -285,8 +299,10 @@ def test_second_invalid_targeted_replacement_stops_without_a_third_request():
     client = FakeClient(
         api_result(
             ScriptRefactorResponse(
+                outcome=RefactorDecisionOutcome.SUGGESTED_REFACTOR,
                 target_source_reference=reference,
                 replacement_source=invalid,
+                decision_reason="This approach should improve the reviewed issue.",
             )
         ),
         api_result(

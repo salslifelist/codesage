@@ -24,20 +24,21 @@
 - Keep symbol hotspots distinct from procedural module/cell hotspots and prevent duplicate evidence.
 - Support `NO_HOTSPOTS_ABOVE_THRESHOLDS` without choosing an arbitrary target.
 
-## AI and candidates
+## AI and refactors
 
 - Use strict Pydantic schemas and application-level referential validation.
 - Script refactors target one validated hotspot definition and reconstruct the complete file locally.
-- Only `refactor_recommended` may contain a candidate.
+- Only a validated `refactor_recommended` review may enable the separate refactor-generation action;
+  the review response itself never contains rewritten source.
 - Preserve raw over-intervention responses in clean-control evaluation even when production rejects them.
-- Enforce candidate limits before parsing and never truncate output.
+- Enforce replacement and reconstructed-source limits before parsing and never truncate output.
 - Reanalyse reconstructed suggestions with the same deterministic pipeline and keep descriptive,
   directional and structural comparisons separate.
 
 ## Privacy and secrets
 
 - Never commit `.env`, API keys, tokens or `.streamlit/secrets.toml`.
-- Do not deliberately persist or log complete user source or model candidates.
+- Do not deliberately persist or log complete user source or generated refactors.
 - Use synthetic/original examples and evaluation cases.
 
 ## Dependencies and commands

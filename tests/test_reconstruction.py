@@ -9,6 +9,7 @@ from pydantic import ValidationError
 from codesage.ai import (
     CorrectionStatus,
     Finding,
+    RefactorDecisionOutcome,
     ReviewOutcome,
     ReviewResponse,
     ReviewResult,
@@ -77,8 +78,18 @@ def target_reference(review: ReviewResult) -> str:
 
 def response(review: ReviewResult, replacement: str, *, reference: str | None = None):
     return ScriptRefactorResponse(
+        outcome=RefactorDecisionOutcome.SUGGESTED_REFACTOR,
         target_source_reference=reference or target_reference(review),
         replacement_source=replacement,
+        decision_reason="This approach should improve the reviewed issue.",
+    )
+
+
+def abstained(review: ReviewResult, reason: str = "No clearly better targeted option was found."):
+    return ScriptRefactorResponse(
+        outcome=RefactorDecisionOutcome.NO_BETTER_REFACTOR,
+        target_source_reference=target_reference(review),
+        decision_reason=reason,
     )
 
 
@@ -91,12 +102,35 @@ def correction(review: ReviewResult, replacement: str, *, reference: str | None 
 
 def test_schema_requires_target_reference_and_replacement_only():
     assert set(ScriptRefactorResponse.model_fields) == {
+        "outcome",
         "target_source_reference",
         "replacement_source",
+        "decision_reason",
     }
     with pytest.raises(ValidationError):
         ScriptRefactorResponse.model_validate(
-            {"target_source_reference": "function:focused:1@L1-L2", "suggested_refactor": "x"}
+            {
+                "outcome": "suggested_refactor",
+                "target_source_reference": "function:focused:1@L1-L2",
+                "suggested_refactor": "x",
+                "decision_reason": "A reason.",
+            }
+        )
+
+
+def test_suggested_refactor_requires_replacement_and_abstention_forbids_it():
+    with pytest.raises(ValidationError):
+        ScriptRefactorResponse(
+            outcome=RefactorDecisionOutcome.SUGGESTED_REFACTOR,
+            target_source_reference="function:focused:1@L1-L2",
+            decision_reason="Missing replacement.",
+        )
+    with pytest.raises(ValidationError):
+        ScriptRefactorResponse(
+            outcome=RefactorDecisionOutcome.NO_BETTER_REFACTOR,
+            target_source_reference="function:focused:1@L1-L2",
+            replacement_source="def focused():\n    return None\n",
+            decision_reason="Should not include a replacement.",
         )
 
 
@@ -107,7 +141,7 @@ def test_request_contains_only_approved_target_source_not_complete_file():
         "def unrelated():\n    return SECRET_UNRELATED\n"
     )
     review = review_for(source, "focused")
-    replacement = "def focused(values=None):\n    return [] if values is None else values\n"
+    replacement = "def focused(values=None):\n    return values\n"
     client = FakeClient(api_result(response(review, replacement)))
     result = generate_script_refactor(source, review.original_analysis, review, client=client)
 
@@ -153,7 +187,7 @@ def test_multiple_review_findings_still_select_one_deterministic_hotspot():
         findings=findings,
     )
     review = ReviewResult(analysis, evidence, response_value, None, None, True)
-    replacement = "def first(values=None):\n    return [] if values is None else values\n"
+    replacement = "def first(values=None):\n    return values\n"
     client = FakeClient(api_result(response(review, replacement)))
 
     result = generate_script_refactor(source, analysis, review, client=client)
@@ -173,7 +207,7 @@ def test_reconstruction_preserves_every_character_outside_target_and_line_ending
         "# preserved suffix\r\ndef unrelated():\r\n    return os.name\r\n"
     )
     review = review_for(source, "focused")
-    replacement = "def focused(values=None):\n    return [] if values is None else values\n"
+    replacement = "def focused(values=None):\n    return values\n"
     result = generate_script_refactor(
         source,
         review.original_analysis,
@@ -201,7 +235,7 @@ def test_method_replacement_is_reindented_inside_its_original_class():
         "    return 1\n"
     )
     review = review_for(source, "Service.focused")
-    replacement = "def focused(self, values=None):\n    return [] if values is None else values\n"
+    replacement = "def focused(self, values=None):\n    return values\n"
     result = generate_script_refactor(
         source,
         review.original_analysis,
@@ -292,7 +326,7 @@ def test_large_reconstruction_preserves_more_than_two_hundred_unrelated_units():
         f"{unrelated}\n"
     )
     review = review_for(source, "focused")
-    replacement = "def focused(values=None):\n    return [] if values is None else values\n"
+    replacement = "def focused(values=None):\n    return values\n"
     result = generate_script_refactor(
         source,
         review.original_analysis,

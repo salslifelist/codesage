@@ -56,6 +56,17 @@ class ScriptComparison:
     warnings: tuple[str, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class MaintainabilityImprovementDecision:
+    """A deterministic accept/reject decision. Never a proprietary aggregate score."""
+
+    accepted: bool
+    failure_codes: tuple[str, ...]
+    improvements: tuple[str, ...]
+    regressions: tuple[str, ...]
+    explanation: str
+
+
 def _direction(before: int | None, after: int | None) -> DirectionalStatus:
     if before is None or after is None:
         return DirectionalStatus.UNRESOLVED
@@ -282,4 +293,145 @@ def compare_scripts(original: AnalysisResult, candidate: AnalysisResult) -> Scri
         smells_introduced=tuple(sorted(after_smells - before_smells)),
         smells_removed=tuple(sorted(before_smells - after_smells)),
         warnings=tuple(warnings),
+    )
+
+
+def _directional_metric(
+    comparison: ScriptComparison, target_names: tuple[str, ...], metric: str
+) -> MetricComparison | None:
+    return next(
+        (
+            item
+            for item in comparison.directional
+            if item.qualified_name in target_names and item.metric == metric
+        ),
+        None,
+    )
+
+
+def _descriptive_metric(
+    comparison: ScriptComparison, target_names: tuple[str, ...], metric: str
+) -> MetricComparison | None:
+    return next(
+        (
+            item
+            for item in comparison.descriptive
+            if item.qualified_name in target_names and item.metric == metric
+        ),
+        None,
+    )
+
+
+def evaluate_maintainability_improvement(
+    comparison: ScriptComparison,
+    target_names: tuple[str, ...],
+    reviewed_smells: tuple[tuple[str, str], ...],
+) -> MaintainabilityImprovementDecision:
+    """Deterministically decide whether a candidate is a verified static improvement.
+
+    ``reviewed_smells`` is the exact set of (qualified_name, smell_code) pairs the
+    validated AI review cited for the approved target(s), derived from deterministic
+    evidence. This function never trusts model-reported outcomes and never produces a
+    proprietary aggregate score: it only reports which individually measured factors
+    improved, regressed or could not be compared.
+    """
+    failure_codes: list[str] = []
+    improvements: list[str] = []
+    regressions: list[str] = []
+
+    for target, code in reviewed_smells:
+        item = _directional_metric(comparison, (target,), f"smell.{code}")
+        label = code.replace("_", " ")
+        if item is None or item.status is DirectionalStatus.UNRESOLVED:
+            failure_codes.append("target_comparison_unresolved")
+            regressions.append(f"{label} could not be compared for {target}.")
+        elif item.after != 0:
+            failure_codes.append("reviewed_finding_remaining")
+            regressions.append(f"{label} is still present in {target}.")
+        else:
+            improvements.append(f"{label} was resolved in {target}.")
+
+    complexity = _directional_metric(comparison, target_names, "complexity")
+    if complexity is not None:
+        if complexity.status is DirectionalStatus.UNRESOLVED:
+            failure_codes.append("target_comparison_unresolved")
+            regressions.append("Cyclomatic complexity could not be compared.")
+        elif complexity.status is DirectionalStatus.REGRESSED:
+            failure_codes.append("complexity_regressed")
+            regressions.append(
+                f"Cyclomatic complexity increased from {complexity.before} to {complexity.after}."
+            )
+        elif complexity.status is DirectionalStatus.IMPROVED:
+            improvements.append(
+                f"Cyclomatic complexity decreased from {complexity.before} to {complexity.after}."
+            )
+
+    nesting = _directional_metric(comparison, target_names, "nesting_depth")
+    if nesting is not None:
+        if nesting.status is DirectionalStatus.UNRESOLVED:
+            failure_codes.append("target_comparison_unresolved")
+            regressions.append("Nesting depth could not be compared.")
+        elif nesting.status is DirectionalStatus.REGRESSED:
+            failure_codes.append("nesting_regressed")
+            regressions.append(f"Nesting depth increased from {nesting.before} to {nesting.after}.")
+        elif nesting.status is DirectionalStatus.IMPROVED:
+            improvements.append(
+                f"Nesting depth decreased from {nesting.before} to {nesting.after}."
+            )
+
+    parameters = _descriptive_metric(comparison, target_names, "parameter_count")
+    if parameters is not None:
+        if parameters.status is DescriptiveStatus.UNRESOLVED:
+            failure_codes.append("target_comparison_unresolved")
+            regressions.append("Parameter count could not be compared.")
+        elif parameters.status is DescriptiveStatus.INCREASED:
+            failure_codes.append("parameter_count_increased")
+            regressions.append(
+                f"Parameter count increased from {parameters.before} to {parameters.after}."
+            )
+
+    for metric, label in (
+        ("high_severity_smell_count", "High-severity finding count"),
+        ("medium_severity_smell_count", "Medium-severity finding count"),
+    ):
+        item = _directional_metric(comparison, target_names, metric)
+        if item is None:
+            continue
+        if item.status is DirectionalStatus.UNRESOLVED:
+            failure_codes.append("target_comparison_unresolved")
+            regressions.append(f"{label} could not be compared.")
+        elif item.status is DirectionalStatus.REGRESSED:
+            failure_codes.append("severity_count_regressed")
+            regressions.append(f"{label} increased from {item.before} to {item.after}.")
+        elif item.status is DirectionalStatus.IMPROVED:
+            improvements.append(f"{label} decreased from {item.before} to {item.after}.")
+
+    introduced = tuple(
+        item for item in comparison.smells_introduced if item.split(":", 1)[0] in target_names
+    )
+    if introduced:
+        failure_codes.append("new_smell_introduced")
+        for item in introduced:
+            regressions.append(f"A new static finding was introduced: {item.split(':', 1)[1]}.")
+
+    if not improvements:
+        failure_codes.append("no_measurable_improvement")
+        if not regressions:
+            regressions.append(
+                "No measured maintainability factor improved for the reviewed target."
+            )
+
+    accepted = not failure_codes
+    explanation = (
+        "The candidate improved at least one measured maintainability factor without a "
+        "measured regression."
+        if accepted
+        else " ".join(dict.fromkeys(regressions))
+    )
+    return MaintainabilityImprovementDecision(
+        accepted=accepted,
+        failure_codes=tuple(dict.fromkeys(failure_codes)),
+        improvements=tuple(dict.fromkeys(improvements)),
+        regressions=tuple(dict.fromkeys(regressions)),
+        explanation=explanation,
     )

@@ -29,7 +29,11 @@ The competition MVP excludes:
 - semantic-equivalence, runtime-performance or security claims;
 - vulnerability, malware, energy, carbon or sustainability analysis;
 - RAG, embeddings, vector databases, user accounts and persistent databases;
-- the full controlled grounded-versus-ungrounded research experiment beyond the bounded submission validation set.
+- the full controlled grounded-versus-ungrounded research experiment beyond the bounded submission validation set;
+- unrestricted general-purpose coding chat: the "Ask CodeSage" follow-up chat answers only about the current completed result;
+- code generation, rewriting or file modification through the explanation chat: chat requests for new code are redirected to the dedicated refactor actions, never fulfilled inline;
+- silent evidence or measurement truncation in any report, appendix or chat response;
+- persistent, server-side or cross-session storage of chat conversations, submitted source or generated candidates.
 
 ## Approved stack
 
@@ -56,6 +60,11 @@ Accept exactly one complete Python script through:
 4. an original built-in example.
 
 All routes produce one normalised source model containing origin, display name, decoded script source, byte count, provenance and AI eligibility. Loading the built-in example follows the same identity and stale-state invalidation path as the other routes and never requests AI review automatically.
+
+The public-GitHub route uses one explicit `Load GitHub file` action. Changing the URL field or
+pressing Enter never fetches automatically; visible helper copy instructs the user to paste an
+approved public `.py` URL and then select the button. Any generic input instruction implying that
+Enter loads the file is hidden only inside the keyed GitHub loader, never globally.
 
 Pasted-source acquisition is limited to 200,000 characters. Upload and public-GitHub acquisition are limited to 200,000 response bytes, and decoded uploaded or fetched text is additionally subject to an explicit 200,000-character limit. Local text must decode as UTF-8. GitHub support is restricted to recognised `github.com/{owner}/{repo}/blob/{ref}/{path}` and `raw.githubusercontent.com/{owner}/{repo}/{ref}/{path}` shapes. Convert approved blob URLs locally, fetch from allow-listed hosts over HTTPS, disable automatic/general redirects, and allow at most three manually followed redirect hops after revalidating every HTTPS target against the exact approved hosts and file shapes. Stream with the response-size limit and use bounded timeouts. Never clone or browse a repository. Never silently truncate, summarise or select a subset of an acquired source.
 
@@ -151,7 +160,124 @@ bounded-input and evidence-validation principles in this plan.
 
 Use configurable `OPENAI_MODEL`, defaulting to the verified competition model `gpt-5.6-sol`, through `OpenAI().responses.parse(...)`. Start with reasoning effort `low`; change it only after evaluation. The product journey is `evidence -> explanation -> targeted user-requested refactor -> deterministic full-file reconstruction -> verification -> qualified comparison`. An explicit AI-review request returns evidence-based explanation and recommendations without rewritten source. Only after a valid `refactor_recommended` review may a separate explicit request generate one approved function or method replacement. CodeSage reconstructs the complete suggested file locally from the unchanged original and that targeted replacement; OpenAI is not asked to return the complete file. Neither request uses tools.
 
-Each explicit refactor-generation request may make at most one automatic technical-correction request, and only when a successfully parsed targeted replacement is malformed, names the wrong target, contains invalid syntax or unsupported content, or cannot be inserted safely. The correction remains bound to the same target, requests only a replacement region and never requests the complete file. Correction never recurses or changes the validated review. A user may explicitly request a different targeted refactor, with optional instructions, without rerunning that review.
+After a review has parsed successfully, exactly one citation-only correction request is permitted
+when full deterministic validation reports `missing_grounding_reference`,
+`invalid_source_reference`, `invalid_evidence_id`, `duplicate_evidence_id` or
+`evidence_source_mismatch`. The strict correction schema contains only zero-based finding indexes,
+exact source references and exact evidence IDs. It receives the original parsed review and compact
+evidence catalogue but not the complete Python source. CodeSage applies only those reference changes
+locally, preserves every prose and outcome field, and reruns the complete validator. A failed second
+validation withholds the review and never triggers a third request. This bounded evidence-reference
+recovery is distinct from SDK transport behaviour, refactor technical correction, alternative
+refactoring and Ask CodeSage requests.
+
+Each explicit refactor-generation request may make at most one automatic technical-correction request, and only when a successfully parsed targeted replacement is malformed, names the wrong target, contains invalid syntax or unsupported content, cannot be inserted safely, or fails the deterministic maintainability-improvement gate below. The correction remains bound to the same target, requests only a replacement region and never requests the complete file. Correction never recurses or changes the validated review. A user may explicitly request a different targeted refactor, with optional instructions, without rerunning that review.
+
+### Code-aware recommendation, generation and deterministic veto
+
+GPT-5.6 makes the code-aware recommendation and generation decision: whether a targeted
+refactor is worth attempting, what coding approach to take, and what code to generate. A
+`refactor_recommended` review may enable generation only when at least one finding for the
+selected target cites an actual deterministic `smell.<code>` evidence item; general
+measurements such as SLOC, complexity or nesting alone are not sufficient. The derived smell
+codes are supplied to the refactor request as explicit static maintainability goals.
+
+One immutable refactor-availability decision is authoritative across production validation, the
+workflow indicator, Overview, AI review, Refactor and print report. It distinguishes `available`,
+`already_verified`, `no_refactor_needed`, `insufficient_evidence`,
+`unsupported_recommendation` and `no_review`. Availability requires a successful
+`refactor_recommended` review, deterministic hotspots, a non-empty recommendation, a supported
+function or method target and at least one cited `smell.<code>` item belonging to that exact target.
+Severity alone never overrides the review outcome. A recommended review without that actionable
+target evidence is rejected before storage with `unsupported_refactor_recommendation`; it must not
+be displayed as a successful recommendation that later becomes unavailable at generation time.
+
+The refactor-generation request may itself abstain: GPT-5.6 returns `suggested_refactor` with
+one replacement, or `no_better_refactor` with no replacement and a required `decision_reason`,
+when it cannot justify a clearly more maintainable targeted replacement. Abstention never
+triggers the technical-correction request and never displays a candidate.
+
+Deterministic verification has veto authority over every proposed replacement. A candidate is
+displayed only after CodeSage's independent, deterministic maintainability-improvement gate
+accepts it (see Candidate limits and verification). Failed attempts, including a failed
+correction, are withheld and explained with concrete measured reasons; no generated source is
+ever shown for a rejected candidate. The absence of an accepted candidate does not prove that no
+possible refactor exists — it means CodeSage could not verify one within its static checks and
+the one permitted correction attempt.
+
+Do not claim behavioural equivalence, runtime correctness or universal superiority for any
+generated candidate, verified or not.
+
+### Alternative refactoring
+
+"Generate a different refactor" is a request for a meaningfully different coding approach to the
+same approved target, not a repeat of the currently verified one. When a verified refactor already
+exists, its exact target replacement is extracted locally (never the complete file) and supplied to
+the next refactor request as the previous replacement to differ from. The developer prompt requires
+a genuinely distinct approach and permits `no_better_refactor` when none exists. CodeSage compares
+the AST of the newly generated targeted replacement with that previous replacement; an AST-equivalent
+alternative is rejected (`alternative_not_different`) and is eligible for the existing single
+technical-correction attempt. If the correction is also AST-equivalent to the previous replacement,
+both attempts are withheld. A failed alternative request never invalidates or replaces the current
+verified refactor. The one-target, one-definition replacement contract applies identically to
+alternative requests.
+
+### Refactor state model
+
+The current verified refactor and the latest alternative-attempt status are distinct states:
+
+- the current verified refactor (or a model abstention) is the only refactor state that persists
+  across requests until explicitly replaced;
+- an initial-refactor failure (no verified refactor yet exists) is a separate error state;
+- an alternative-refactor failure (a verified refactor already exists) is a separate error state
+  again, and must never be presented as if it invalidated the existing verified refactor.
+
+Mere presence of `REFACTOR_KEY` never means that code changed. One shared classifier distinguishes a
+verified refactor, model abstention, unavailable/invalid result and no result. A verified refactor
+requires success, complete suggested source, syntax-valid verification, deterministic reanalysis and
+a complete comparison. The separate canonical availability decision gives the Refactor workflow
+stage the explanatory labels `Available`, `Verified`, `No change recommended`, `Insufficient
+evidence`, `Review needs correction` or `After AI review`; the unexplained `Not offered` label is
+not used.
+
+State transitions:
+
+- before an initial request: clear the initial-refactor and alternative-refactor error states;
+- before an alternative request: clear only the alternative-refactor error state and preserve the
+  current verified refactor;
+- after a successful initial request: store the new current verified refactor; clear both error
+  states;
+- after a successful alternative request: replace the current verified refactor with the newly
+  verified alternative; clear both error states; update the cached request identity;
+- after a failed initial request: do not create a current verified refactor; store the failure as
+  the initial-refactor error state;
+- after a failed alternative request: preserve the existing current verified refactor unchanged;
+  store the failure only as the alternative-refactor error state.
+
+User-facing wording must never imply both that a verified refactor is recommended and that no code
+change is recommended in the same breath. A failed alternative reads distinctly from a failed
+initial request and always states that the existing current verified refactor remains unchanged.
+
+### Optional-instruction limits
+
+The maximum length of optional first- and alternative-refactor instructions is one configured
+constant (500 characters). The interface shows the exact limit in the field label and a live
+"current/limit" character counter below the field. The same constant enforces the limit on the
+backend request; the frontend `max_chars` and the backend check are never allowed to drift apart.
+
+### API errors and retry policy
+
+When OpenAI returns an HTTP error, CodeSage records only the HTTP status code and the request ID
+when present. The interface shows a fixed, privacy-safe message interpolating the status code, with
+the request ID available in a collapsed "Technical details" control. The raw response body, the
+submitted prompt, the submitted source and API keys are never displayed, logged or included in any
+error. All other typed failures keep their existing fixed, privacy-safe messages.
+
+The OpenAI SDK client is configured with one transport-level retry (`max_retries=1`) for transient
+network failures. This is distinct from, and does not replace, CodeSage's own one bounded
+technical-correction attempt: the SDK retry repeats an unanswered request after a transport failure;
+the technical correction resends a validated failure to the model once, asking it to fix a rejected
+candidate. The two mechanisms never compound recursively.
 
 Before sending source, require explicit user action and disclose that source will be sent to OpenAI. Keep deterministic analysis available without a key or successful model call.
 
@@ -222,6 +348,10 @@ interfaces using location-insensitive AST comparison. Newly introduced `exec`, `
 `__import__`, runtime namespace writes or generated APIs cannot substitute for explicit definitions.
 Unexpected removals, unrelated changes, missing imports, dynamic namespace synthesis, changes outside
 the target region or an unverifiable complete-file structure are verification failures.
+The approved target's location-insensitive AST must itself change; an unchanged target implementation
+is a typed verification failure and may use the one permitted technical correction. Presentation
+reports target implementation and target signature separately, retains the original target line
+range and states unrelated-preservation, added, removed and unresolved definition counts explicitly.
 
 A malformed targeted replacement may use the one permitted non-recursive technical correction. The
 correction receives the exact replacement violation, remains bound to the same approved target and
@@ -229,6 +359,28 @@ returns only that target definition. A failure in the reconstructed file's focus
 does not broaden the request or trigger another correction. Production withholds invalid generated
 source; future evaluation retains the failed first generation separately, so a successful correction
 cannot conceal the initial contract violation.
+
+### Deterministic maintainability-improvement gate
+
+After the focused structural gate passes, CodeSage evaluates a separate, deterministic
+`MaintainabilityImprovementDecision` before a candidate may be displayed. It reports `accepted`,
+`failure_codes`, `improvements`, `regressions` and a plain-text `explanation`; it never adds a
+proprietary aggregate score. Acceptance requires all of:
+
+- every deterministic smell cited by the validated review for the selected target is absent from
+  the candidate target, with no unresolved reviewed-target comparison;
+- at least one measured factor improves: complexity, nesting depth, a high- or medium-severity
+  smell count, or a reviewed individual smell being removed;
+- no measured regression: complexity, nesting depth, parameter count, a high- or medium-severity
+  smell count, or any newly introduced smell; no unrelated definition or interface changes.
+
+SLOC and statement count remain descriptive and never independently fail an otherwise valid
+refactor unless they trigger a new threshold-defined smell or violate the existing size limits. A
+supported mutable-default default-value change may still alter the default value under the
+existing structural rule and keep its interface warning, but must still pass every other gate
+condition. A rejected candidate feeds its exact failure codes and measured before/after values into
+the one permitted technical correction; if the corrected candidate also fails, both attempts are
+withheld and never displayed.
 
 Directional measurements use `improved`, `regressed`, `unchanged` or `unresolved`: cyclomatic complexity, nesting depth and threshold-defined smells/counts for comparable units.
 
@@ -241,6 +393,56 @@ Never derive “better overall”, “more maintainable overall”, “safe”, 
 Large verified comparisons use summary-first progressive disclosure: target metrics and structural
 counts remain prominent, while complete source, metric tables, structural changes and aggregated
 warning inventories remain available in collapsed, bounded-height controls.
+The Refactor workspace states `Code changed: Yes` only for a verified target AST change. Abstention
+states `Code changed: No`; failed or incomplete results state that no verified change was produced.
+Measurements & evidence shows its full before/after heading only when a verified comparison exists;
+abstention, failed attempts and incomplete comparison state each receive an explicit bordered
+explanation instead of a blank section.
+
+## Ask CodeSage follow-up chat
+
+"Ask CodeSage about this result" is a bounded, evidence-based follow-up chat, implemented and
+tested. It is not a general-purpose coding assistant: it explains the current completed result only
+and becomes available only after a successful AI review. The same conversation is shown beneath the
+completed AI review and beneath the current verified refactor, backed by one shared session-state
+history, so switching workspace views does not create separate histories.
+
+A dedicated chat request function, separate from review and refactor generation, sends only: the
+deterministic evidence the validated review actually cited (never the complete evidence package);
+the validated review; the approved target source, extracted locally (never the complete file); the
+current verified target replacement when one exists, likewise extracted alone; target-scoped
+before-and-after measurements, structural changes and warnings; the review's suggested safety
+checks; and a bounded number of recent conversation turns. The complete source is never added merely
+because chat is enabled, regardless of file size. All source, review content, refactor source, prior
+messages and the user's question are treated as untrusted data.
+
+The strict structured response (`CoachResponse`) contains `answer`, `evidence_ids`,
+`source_references`, `limitations` and an optional `suggested_follow_up`. It has no field capable of
+carrying replacement source, so a request for new or different code can only ever be redirected in
+prose, never fulfilled: the schema itself preserves the existing syntax, scope, comparison and
+maintainability gates. Every cited evidence ID and source reference is validated against the exact
+context supplied for that request before display; an invalid citation is rejected, not shown. The
+model must not invent measurements, claim code execution, behavioural equivalence, runtime
+correctness, security or performance, or silently convert an explanation request into a new refactor;
+when supplied evidence cannot answer the question, the response must say so and record it as a
+limitation.
+
+Optional starter questions are offered for the current state (five general starters, plus four
+refactor-specific starters once a verified refactor exists) and submit through the same chat
+mechanism as a typed question, never a separate hard-coded answer. The maximum user-message length
+is one configured constant (`COACH_MESSAGE_CHARACTER_LIMIT`, 1,000 characters), shown explicitly in
+the field with a live character counter. Conversation history and output tokens sent to the model are
+both bounded by configured constants. Each user submission makes exactly one explicit OpenAI request;
+opening or switching to the chat section never does. The chat uses the same safe timeout, retry and
+privacy-safe API-error handling as review and refactor requests.
+
+The conversation clears whenever the source changes, the source is reanalysed, a new AI review
+replaces the previous one, the source digest no longer matches, or the user selects "Clear
+conversation". When a verified alternative replaces the current refactor, the conversation is cleared
+rather than attempting unreliable selective invalidation of refactor-specific answers. The chat never
+changes `REFACTOR_KEY` or review state. It is excluded from the print-friendly report and its
+interactive controls and transcript are hidden under `@media print` in the ordinary workspace; it is
+not persisted beyond the current Streamlit session.
 
 ## User interface
 
@@ -249,7 +451,8 @@ verified suggested refactor and comparison state. Changing presentation mode mus
 make an OpenAI request or duplicate business logic.
 
 Interactive app mode is a wide Streamlit workspace with a compact, light source sidebar. The sidebar
-contains CodeSage identity, the four script source routes, the selected route's basic control and an
+contains CodeSage identity, a prominent “Choose your source” control with the four script source
+routes, the selected route's basic control and an
 active-source status where applicable; workflow explanations, future-work copy, primary workflow
 actions and print controls stay out of the sidebar.
 
@@ -257,16 +460,36 @@ The interactive workspace has three deliberate states. With no source loaded, sh
 screen-only CodeSage introduction, one Load built-in example action, guidance to the other sidebar
 routes, a three-step explanation and three compact value cards; do not show result tabs or invented
 results. With a source loaded but not analysed, retain compact product identity and show the active
-source, a bounded preview, what CodeSage will measure and one prominent Analyse code action. After
+source, a bounded preview, what CodeSage will measure and one prominent Analyse code action. The
+built-in example can be selected from either the landing page or sidebar; deferred source-route state
+keeps that choice stable across reruns and invalidates results belonging to another source. After
 analysis, remove the landing treatment, show a compact source and result-status header, then expose
-the four bounded result tabs: Overview, AI review, Suggested refactor and Technical details.
+the four bounded workspace views: Overview, AI review, Refactor and Measurements & evidence.
 
-At each stage, one primary workflow action is shown in the main workspace: Load built-in example,
-Analyse code, Get AI review, Generate suggested refactor or Try a different refactor as applicable.
+At each stage, one primary workflow action is shown in the main workspace: Try the built-in example,
+Analyse code, Get AI review, Generate suggested refactor or Generate a different refactor as
+applicable. AI review is optional: complete deterministic results, Measurements & evidence and the
+print report remain useful without sending source or evidence to OpenAI. Workspace transitions use
+separate canonical application state and widget-owned state: the canonical selection is copied into
+the segmented control before widget creation, while user selections are copied back through its
+callback. Programmatic transitions update only canonical state and rerun once after storing a
+successful result. Successful destination changes request a one-time scroll to the top through one
+static local helper that contains no source or network operation and covers the browser document and
+the supported Streamlit scrolling containers.
+Every completed AI-review page states the canonical refactor decision immediately after findings,
+safety checks and limitations, and before the optional Ask CodeSage conversation. An available
+decision shows the existing generation action and approved target names; `no_refactor_needed` and
+`insufficient_evidence` show explicit, state-specific conclusions without generation controls;
+`unsupported_recommendation` asks for a corrected review without falsely claiming that the model did
+not recommend a refactor. The Refactor workspace and print report use the same decision and wording.
 The Overview is summary-first; AI findings use distinct cards; a verified refactor leads with compact
 target measurements and a bounded unified diff; complete files and detailed inventories, evidence,
 comparisons, warnings and raw technical data remain available through collapsed or bounded-height
-controls. Print-friendly report is a secondary post-analysis action.
+controls. Complexity scores show their Radon rank band and explain that the rank is not an overall
+quality grade. Complete original and suggested files remain available through an explicitly labelled
+side-by-side comparison. Optional first and alternative-refactor instructions are normalised for
+cache identity without invalidating the source, analysis or review. Print-friendly report is a
+secondary post-analysis action.
 
 Model-suggested checks are presented as a numbered, non-interactive “Safety checks to run before
 refactoring” section. They are recommendations for the user to run against the original code and then
@@ -278,8 +501,54 @@ source, deterministic summary, priority hotspot and findings, AI review, safety 
 refactor outcome, target measurements, interface and trade-off warnings, assumptions and limitations.
 The interactive landing hero and value cards are excluded from the report.
 Browser Print or Save as PDF is the supported output route; print styling hides Streamlit chrome,
-interactive controls and screen-only notices without a PDF library, external JavaScript or a
-third-party print component.
+interactive controls and screen-only notices without a PDF library, external network resource or a
+third-party print component. The single static scroll helper is app-only and never runs in print
+output.
+
+### Print-report specification
+
+The report order is: source; deterministic summary; priority hotspot; AI maintainability review;
+safety checks; suggested refactor and changed-hotspot diff; complete source files, only when the
+source is at or below the configured print-size threshold; and, last, a Measurements & evidence
+appendix.
+
+The appendix is a dedicated, print-only renderer using static headings, text and `st.table` output
+only — never expanders or interactive dataframes, which are not reliable printable content — and it
+never truncates a row silently. It includes: every analysed code unit, with the total row count in
+its heading and, for large inventories, explicitly labelled "Part N of M" table chunks that preserve
+every row; every configured hotspot threshold, stated as configurable product defaults rather than
+universal laws; every analysis warning, or an explicit "None." statement; the exclusions count and
+detail, or an explicit statement that none apply; every evidence item cited by the AI review (never
+uncited evidence), or an explicit statement that no AI-review evidence is available; when a verified
+refactor exists, every directional and descriptive comparison row and every comparison warning, or an
+explicit statement that no before-and-after measurements are available; and every structural
+comparison row with category, name and status, plus changed/unchanged/added/removed/unresolved
+totals, or an explicit statement that no structural verification results are available. Raw analysis
+JSON remains an onscreen-only, collapsed "Raw analysis data — advanced" control and is never printed.
+
+A named configuration constant (`PRINT_COMPLETE_SOURCE_CHARACTER_LIMIT`, 12,000 characters) governs
+whether the two complete-file source listings print. At or below the threshold, both complete files
+print in full. Above it, both complete-file listings are omitted and replaced with an explicit
+notice stating the exact source character count, that the changed-hotspot diff and complete static
+measurements remain included, and that the complete files remain available in the CodeSage app; the
+changed-hotspot diff itself is never omitted regardless of source size. A section is never labelled
+"Compare the complete files" when the complete files have been omitted. Measurements and evidence are
+never shortened because of source size; any future table limit must state the exact number of rows
+shown and omitted, since silent truncation is prohibited.
+
+The canonical print report includes only the currently verified refactor, or an explicit
+availability statement derived from the same decision used onscreen: available but not generated,
+no targeted refactor recommended, insufficient static evidence, or an unsupported recommendation
+requiring correction. It never includes the alternative-generation form, optional-instruction fields,
+generation buttons, a failed alternative-attempt notification, transient API errors from a later
+interactive request, or the "Ask CodeSage" chat interface or transcript. For users who print the
+ordinary workspace instead of opening the dedicated print report, the alternative-generation form,
+the alternative-attempt status and the "Ask CodeSage" section are each wrapped in a keyed screen-only
+container and hidden under `@media print`.
+Before any report content is rendered, the active source digest must match the deterministic
+analysis digest and every present review/refactor original-analysis digest. A mismatch produces only
+the stale-report instruction to analyse the current source again; mixed-source results are never
+printed. The source identity printed inside the report is authoritative.
 
 Use labelled controls, logical reading order, actionable errors and text in addition to colour. Small
 tables are content-sized; large inventories, comparisons, warning lists and code views are bounded
@@ -288,7 +557,9 @@ laptop width and in a narrower browser window.
 
 ## Submission validation and future applied-AI evaluation
 
-Submission validation demonstrates the four script source routes, deterministic thresholds, explicit
+Submission validation demonstrates five supported source journeys—built-in example from the landing
+page, built-in example from the sidebar, pasted Python, uploaded `.py` and a public GitHub `.py`
+URL—plus deterministic thresholds, explicit
 AI consent, evidence validation, targeted reconstruction, bounded correction and qualified static
 comparison using synthetic scripts and mocked automated calls, supplemented by a small documented
 manual acceptance set. It is not presented as a statistically controlled research result.
@@ -314,7 +585,7 @@ response. That experiment is not a submitted-MVP Definition of Done item.
 
 ## Tests
 
-Cover all four script routes and limits; URL allow-listing, conversion, redirects, timeouts and HTML; all measurements, smells and thresholds; procedural SLOC range de-duplication; hotspot granularity, ordering and zero-hotspot results; strict production AI schemas and outcomes; replacement and reconstructed-file size formulas; comparison semantics; structural warnings; deterministic fallback; built-in-example invalidation; bounded rendering; and static-only claims.
+Cover all five source journeys and limits; deferred source-route state and synchronised permanent/widget workspace state across reruns; URL allow-listing, conversion, redirects, timeouts and HTML; all measurements, smells and thresholds; procedural SLOC range de-duplication; hotspot granularity, ordering, complexity-rank explanation and zero-hotspot results; strict production AI schemas and outcomes; first and alternative-refactor instruction combinations; replacement and reconstructed-file size formulas; comparison semantics; structural warnings; deterministic fallback; built-in-example invalidation; bounded rendering; one-use scrolling; deterministic-only reporting; and static-only claims. Also cover: AST-equivalent alternative rejection and its one correction attempt; separate current-refactor and alternative-attempt error states and their clearing rules; privacy-safe HTTP status/request-ID display without the raw response body; the shared optional-instruction and chat-message character-limit constants; the Measurements & evidence print appendix, including chunked large tables and explicit absence statements; the print-size threshold's complete-file omission notice; and the bounded "Ask CodeSage" chat's availability, grounded context, citation validation, history bounding, single-request-per-submission behaviour, state-clearing rules and print/session exclusion.
 
 Use pytest, mock ordinary model/network calls and prioritise domain/integration tests over optional UI automation. Run Ruff and `pip check`. Manual acceptance covers pasted, uploaded, built-in and real pinned public-GitHub scripts, live model script review, clean-browser deployment and responsive presentation.
 
@@ -337,7 +608,13 @@ Automatic cut order: CI, candidate download, non-trivial copy controls, decorati
 
 ## Definition of Done
 
-- All four Python-script source routes pass their acceptance checks.
+Checkpoint status: the competition-MVP implementation requirements below are complete and covered by
+the automated suite unless an item explicitly concerns external submission work. The final live-model
+evidence-correction journey, a complete final manual browser regression, deployment verification,
+the polished README, demo script/video and Devpost evidence remain separate submission tasks. The
+following list is the overall completion checklist, not a claim that those external tasks have run.
+
+- All five supported Python-script source journeys pass their acceptance checks.
 - The deterministic analyser reports the approved measurements and smells without execution.
 - Procedural script hotspots, symbol granularity, de-duplication and zero-hotspot outcomes are tested.
 - At most three transparent hotspots are shown.
@@ -345,12 +622,19 @@ Automatic cut order: CI, candidate download, non-trivial copy controls, decorati
 - `refactor_recommended` enables a separate explicit targeted script replacement, reconstructed into
   a complete suggested script locally.
 - AI review remains useful without generating source; abstention and no-refactor outcomes do not enable refactor generation.
+- A generated candidate is displayed only after the deterministic maintainability-improvement gate accepts it; the refactor model may itself abstain with `no_better_refactor`, and failed or abstained attempts are withheld and explained, never displayed as source.
 - Candidate size, syntax, re-analysis and comparison rules pass.
 - Complete Original code and Suggested refactor views appear only for statically verified refactors
   and remain available through bounded progressive disclosure in interactive mode.
 - Oversized accepted scripts retain deterministic results and disable AI without truncation.
 - AI failures preserve deterministic results.
 - Bounded submission validation is recorded without implying completion of a controlled research experiment.
+- The interactive workspace and the print report never simultaneously imply that a verified refactor is recommended and that no code change is recommended; a failed alternative reads distinctly from a failed initial request and never invalidates the existing current verified refactor.
+- "Generate a different refactor" receives the previous approved target replacement, requests a meaningfully different approach, and rejects an AST-equivalent alternative rather than silently accepting a repeat.
+- The print report's Measurements & evidence appendix is complete for every analysed unit, threshold, warning, exclusion, cited evidence item and comparison row, or states explicitly why one is unavailable; large source listings may be omitted per the configured print-size threshold, but measurements and evidence are never silently shortened.
+- OpenAI HTTP errors show only a privacy-safe status and optional request ID; the raw response body, prompt, source and API keys are never exposed.
+- The optional-instruction and chat-message character limits are each one shared configuration constant, visible in the interface with a live counter, and enforced identically on the frontend and backend.
+- The bounded "Ask CodeSage" chat answers only about the current completed result, cites only supplied evidence and source references, never returns unverified replacement code, and is excluded from the print report and from persistence beyond the session.
 - Automated tests, Ruff, dependency checks and manual acceptance pass.
 - Deployment works from a clean browser with secrets and cost controls.
 - README, licence, installation, supported platforms, evaluation, privacy and limitations are complete.

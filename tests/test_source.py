@@ -52,11 +52,72 @@ def test_built_in_example_is_a_canonical_valid_script_with_a_hotspot():
     assert document.display_name == "CodeSage example.py"
     assert document.ai_eligible
     assert analysis.syntax_valid
-    assert [item.qualified_name for item in analysis.hotspots] == ["choose_priority_item"]
-    assert {smell.code for smell in analysis.hotspots[0].smells} == {
-        "deep_nesting",
-        "mutable_default",
-    }
+
+
+def test_built_in_example_is_a_realistic_complete_file_with_one_priority_hotspot():
+    """The example must be realistic and demonstrate one clean, refactorable hotspot."""
+    document = normalise_example_source()
+    analysis = analyse_script(document.text)
+
+    physical_lines = document.text.splitlines()
+    assert 70 <= len(physical_lines) <= 120
+    assert BUILT_IN_EXAMPLE.lstrip().startswith('"""')
+    assert "@dataclass" in BUILT_IN_EXAMPLE
+
+    non_module_units = [unit for unit in analysis.units if unit.qualified_name != "<module>"]
+    assert 5 <= len(non_module_units) <= 8
+
+    assert [item.qualified_name for item in analysis.hotspots] == ["choose_next_delivery"]
+    hotspot = analysis.hotspots[0]
+    assert {smell.code for smell in hotspot.smells} == {"deep_nesting"}
+    assert hotspot.nesting_depth is not None and hotspot.nesting_depth >= 4
+    assert hotspot.complexity is not None and hotspot.complexity < 11
+    assert hotspot.parameter_count == 1
+
+    other_units = [
+        unit for unit in non_module_units if unit.qualified_name != "choose_next_delivery"
+    ]
+    assert other_units
+    assert all(not unit.smells for unit in other_units)
+
+
+def test_built_in_example_hotspot_is_refactorable_by_guard_clauses_without_regression():
+    """Converting the nested ifs to guard clauses must lower nesting, not complexity."""
+    document = normalise_example_source()
+    nested_body = (
+        "    for order in orders:\n"
+        "        if order.status == PENDING_STATUS:\n"
+        '            if order.priority == "urgent":\n'
+        "                if order.distance_km <= MAX_URGENT_DISTANCE_KM:\n"
+        "                    return order\n"
+        "    return None\n"
+    )
+    guard_clause_body = (
+        "    for order in orders:\n"
+        "        if order.status != PENDING_STATUS:\n"
+        "            continue\n"
+        '        if order.priority != "urgent":\n'
+        "            continue\n"
+        "        if order.distance_km > MAX_URGENT_DISTANCE_KM:\n"
+        "            continue\n"
+        "        return order\n"
+        "    return None\n"
+    )
+    assert nested_body in document.text
+    refactored_text = document.text.replace(nested_body, guard_clause_body)
+    assert refactored_text != document.text
+
+    original_hotspot = analyse_script(document.text).hotspots[0]
+    refactored_units = analyse_script(refactored_text).units
+    refactored_unit = next(
+        unit for unit in refactored_units if unit.qualified_name == "choose_next_delivery"
+    )
+
+    assert refactored_unit.nesting_depth is not None and refactored_unit.nesting_depth < 4
+    assert refactored_unit.complexity is not None
+    assert refactored_unit.complexity <= original_hotspot.complexity
+    assert not any(smell.code == "deep_nesting" for smell in refactored_unit.smells)
+    assert not refactored_unit.smells
 
 
 def test_empty_pasted_source_is_preserved_for_the_no_input_interface_state():

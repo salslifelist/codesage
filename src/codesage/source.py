@@ -26,14 +26,93 @@ AI_REVIEW_CHARACTER_LIMIT = SCRIPT_AI_REVIEW_CHARACTER_LIMIT
 GITHUB_TIMEOUT_SECONDS = GITHUB_REQUEST_TIMEOUT_SECONDS
 MAX_GITHUB_REDIRECTS = MAX_VALIDATED_GITHUB_REDIRECTS
 APPROVED_GITHUB_HOSTS = {"github.com", "raw.githubusercontent.com"}
-BUILT_IN_EXAMPLE = """def choose_priority_item(items, selected=[]):
-    for item in items:
-        if item.get("available"):
-            if item.get("priority"):
-                if item["priority"] > 5:
-                    selected.append(item)
-    return selected[0] if selected else None
+BUILT_IN_EXAMPLE = '''"""Delivery dispatch prioritisation for a small last-mile courier service.
+
+This module models a simple queue of customer orders and picks which order a
+courier should attempt to deliver next. It is intentionally small: it exists
+to demonstrate CodeSage's static analysis on a realistic, runnable script
+rather than to model a production dispatch system.
 """
+
+from __future__ import annotations
+
+from dataclasses import dataclass, replace
+from statistics import mean
+
+MAX_URGENT_DISTANCE_KM = 15.0
+STANDARD_WEIGHT_LIMIT_KG = 25.0
+PENDING_STATUS = "pending"
+DISPATCHED_STATUS = "dispatched"
+
+
+@dataclass
+class Order:
+    """One customer order waiting to be delivered."""
+
+    order_id: str
+    customer_name: str
+    status: str
+    priority: str
+    distance_km: float
+    weight_kg: float
+
+
+def filter_pending_orders(orders: list[Order]) -> list[Order]:
+    """Return only the orders that are still waiting to be dispatched."""
+    return [order for order in orders if order.status == PENDING_STATUS]
+
+
+def total_weight_kg(orders: list[Order]) -> float:
+    """Return the combined weight of the supplied orders."""
+    return sum(order.weight_kg for order in orders)
+
+
+def average_distance_km(orders: list[Order]) -> float:
+    """Return the mean delivery distance, or zero for an empty list."""
+    if not orders:
+        return 0.0
+    return mean(order.distance_km for order in orders)
+
+
+def choose_next_delivery(orders: list[Order]) -> Order | None:
+    """Pick the first pending, urgent order that a courier can reach quickly.
+
+    A courier can only carry one urgent order at a time, so this walks the
+    queue in order and returns the first order that clears every urgent
+    dispatch rule. It returns None when nothing currently qualifies.
+    """
+    for order in orders:
+        if order.status == PENDING_STATUS:
+            if order.priority == "urgent":
+                if order.distance_km <= MAX_URGENT_DISTANCE_KM:
+                    return order
+    return None
+
+
+def mark_order_dispatched(order: Order) -> Order:
+    """Return a copy of the order marked as dispatched."""
+    return replace(order, status=DISPATCHED_STATUS)
+
+
+def summarise_orders(orders: list[Order]) -> dict[str, int]:
+    """Return a count of orders grouped by their current status."""
+    summary: dict[str, int] = {}
+    for order in orders:
+        summary[order.status] = summary.get(order.status, 0) + 1
+    return summary
+
+
+def build_dispatch_report(orders: list[Order]) -> dict[str, object]:
+    """Combine the helpers above into one small daily dispatch report."""
+    pending = filter_pending_orders(orders)
+    return {
+        "pending_orders": len(pending),
+        "pending_weight_kg": total_weight_kg(pending),
+        "average_distance_km": average_distance_km(pending),
+        "status_counts": summarise_orders(orders),
+        "next_delivery": choose_next_delivery(orders),
+    }
+'''
 
 
 class SourceOrigin(StrEnum):
