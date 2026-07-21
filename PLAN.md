@@ -2,15 +2,17 @@
 
 ## Status and authority
 
-This is the single authoritative implementation plan for CodeSage. It incorporates the approved context audit, feasibility revisions, amendment review, focused notebook-target rules, zero-hotspot procedure, evaluation distinction and procedural-module rules. The source planning documents are preserved outside the repository and are superseded by this file.
+This is the single authoritative implementation plan for CodeSage. It incorporates the approved context audit, feasibility revisions, amendment review, submission scope freeze, zero-hotspot procedure, evaluation distinction and procedural-module rules. The source planning documents are preserved outside the repository and are superseded by this file.
 
 The majority of core development, testing, evaluation, deployment and documentation must remain in the primary Codex thread. Run `/feedback` there only after most core functionality has been built. Every commit and push requires explicit human approval.
 
 ## Product and user
 
-CodeSage is a deployed Streamlit maintainability coach that analyses pasted, uploaded or public-GitHub Python scripts and notebooks without execution, identifies up to three transparent structural hotspots, uses GPT-5.6 to explain and refactor them from deterministic evidence, and statically compares the original with the generated candidate while withholding claims of behavioural correctness.
+CodeSage is a deployed Streamlit maintainability coach for complete Python scripts. It accepts pasted source, a local `.py` file, one public-GitHub `.py` URL or an original built-in example; identifies up to three transparent structural hotspots without execution; uses GPT-5.6 to explain and refactor them from deterministic evidence; and statically compares the original with the reconstructed suggestion while withholding claims of behavioural correctness.
 
-Primary users are junior and intermediate Python developers, data scientists, machine-learning practitioners, students and small teams. The educational journey is evidence → explanation → focused refactor → independent re-analysis → qualified comparison.
+Primary users are junior and intermediate Python developers, data scientists, machine-learning practitioners, students and small teams. The educational journey is evidence → explanation → targeted user-requested refactor → deterministic full-file reconstruction → verification → qualified comparison.
+
+Public scope statement: “CodeSage currently supports complete Python script analysis. Notebook and additional language support are planned future work.”
 
 ## Closed scope
 
@@ -20,13 +22,14 @@ The competition MVP excludes:
 - Maintainability Index or any proprietary aggregate quality score;
 - model training or fine-tuning;
 - repository-wide or multi-repository analysis;
-- custom notebook dependency graphs or execution-order inference;
-- execution of submitted code, generated code or notebooks;
-- notebook insertion, deletion, reordering or reconstruction;
+- Jupyter notebook input, analysis, review and reconstruction;
+- additional programming languages;
+- execution of submitted or generated code;
 - private GitHub repositories, GitHub OAuth and arbitrary URL fetching;
 - semantic-equivalence, runtime-performance or security claims;
 - vulnerability, malware, energy, carbon or sustainability analysis;
-- RAG, embeddings, vector databases, user accounts and persistent databases.
+- RAG, embeddings, vector databases, user accounts and persistent databases;
+- the full controlled grounded-versus-ungrounded research experiment beyond the bounded submission validation set.
 
 ## Approved stack
 
@@ -34,7 +37,8 @@ The competition MVP excludes:
 - Standard-library `venv` and pip.
 - Streamlit 1.59.2.
 - `ast` plus Radon 6.0.1 for cyclomatic complexity.
-- nbformat 5.10.4.
+- nbformat 5.10.4 remains pinned from feasibility work but is not used to claim notebook support in
+  the submitted MVP.
 - OpenAI Python SDK 2.46.0 using the Responses API.
 - Pydantic 2.13.4 strict models.
 - HTTPX 0.28.1.
@@ -44,22 +48,22 @@ Do not introduce uv, Poetry, Pipenv, Conda, another Python version or an additio
 
 ## Inputs and normalisation
 
-Accept exactly one source document through:
+Accept exactly one complete Python script through:
 
 1. pasted Python;
 2. local `.py` upload;
-3. local `.ipynb` upload;
-4. an approved public GitHub `.py` file URL;
-5. an approved public GitHub `.ipynb` file URL;
-6. an original built-in example.
+3. an approved public GitHub `.py` file URL;
+4. an original built-in example.
 
-All routes produce one normalised source model containing kind, origin, display name, decoded source or notebook, byte count, provenance, warnings and AI eligibility.
+All routes produce one normalised source model containing origin, display name, decoded script source, byte count, provenance and AI eligibility. Loading the built-in example follows the same identity and stale-state invalidation path as the other routes and never requests AI review automatically.
 
-Acquisition is limited to 100 KB. Local text must decode as UTF-8. GitHub support is restricted to recognised `github.com/{owner}/{repo}/blob/{ref}/{path}` and `raw.githubusercontent.com/{owner}/{repo}/{ref}/{path}` shapes. Convert approved blob URLs locally, fetch from allow-listed hosts over HTTPS, disable general redirects, stream with a 100 KB limit and use bounded timeouts. Never clone or browse a repository.
+Pasted-source acquisition is limited to 200,000 characters. Upload and public-GitHub acquisition are limited to 200,000 response bytes, and decoded uploaded or fetched text is additionally subject to an explicit 200,000-character limit. Local text must decode as UTF-8. GitHub support is restricted to recognised `github.com/{owner}/{repo}/blob/{ref}/{path}` and `raw.githubusercontent.com/{owner}/{repo}/{ref}/{path}` shapes. Convert approved blob URLs locally, fetch from allow-listed hosts over HTTPS, disable automatic/general redirects, and allow at most three manually followed redirect hops after revalidating every HTTPS target against the exact approved hosts and file shapes. Stream with the response-size limit and use bounded timeouts. Never clone or browse a repository. Never silently truncate, summarise or select a subset of an acquired source.
+
+Complete-file script AI review is limited to 100,000 source characters. Scripts containing 100,001 through 200,000 characters retain complete deterministic analysis but are not sent to OpenAI; they must not be truncated or replaced with a hotspot-only review.
 
 ## Deterministic maintainability analysis
 
-Maintainability means local structural characteristics affecting how readily a function, method, module body or notebook cell can be understood, modified and tested. It does not measure correctness, architecture, test quality or overall software quality.
+Maintainability means local structural characteristics affecting how readily a function, method or module body can be understood, modified and tested. It does not measure correctness, architecture, test quality or overall software quality.
 
 ### Measurements
 
@@ -71,8 +75,7 @@ Maintainability means local structural characteristics affecting how readily a f
 - Radon cyclomatic complexity and A–F rank;
 - maximum control-structure nesting depth;
 - effective parameter count, excluding conventional `self` or `cls`;
-- notebook cell size, location and analysis status;
-- module/cell top-level procedural SLOC and direct statement count.
+- module-level procedural SLOC and direct statement count.
 
 SLOC is the number of non-blank, non-comment source lines in the applicable source range.
 
@@ -94,14 +97,14 @@ Boolean-leaf counting recursively flattens `and` and `or` expressions. Each non-
 | Mutable default | List/dict/set literal or comprehension, or direct `list`/`dict`/`set` call |
 | Bare exception | `except:` |
 | Broad exception | `except Exception` or a tuple containing `Exception` |
-| Oversized procedural module/cell | Top-level procedural SLOC > 50 |
+| Oversized procedural module | Top-level procedural SLOC > 50 |
 | Excessive top-level structure | More than 30 qualifying direct statements |
 
 Thresholds are configurable constants and must be tested and documented as product defaults, not universal laws.
 
 Smell severity for deterministic hotspot ordering is:
 
-- **High:** long function or method; deep nesting; high cyclomatic complexity; oversized procedural module or cell; excessive top-level structure.
+- **High:** long function or method; deep nesting; high cyclomatic complexity; oversized procedural module; excessive top-level structure.
 - **Medium:** too many parameters; complex Boolean expression; mutable default; bare exception; broad exception.
 
 Severity is used only for deterministic hotspot ordering. It is not a claim about runtime risk, correctness or overall quality.
@@ -110,13 +113,13 @@ Severity is used only for deterministic hotspot ordering. It is not a claim abou
 
 Module-level procedural SLOC comprises de-duplicated non-blank, non-comment lines belonging to qualifying executable constructs rooted directly in `Module.body`. Include complete ranges of assignments, expressions and module-level `if`, loops, `with`, `try`, `match` and equivalent constructs, including statements nested inside those constructs. Exclude imports, function/class definitions and their complete bodies, and the recognised module docstring.
 
-Direct top-level statement count is the number of qualifying executable entries in `Module.body`. Apply the equivalent rules to a notebook cell.
+Direct top-level statement count is the number of qualifying executable entries in `Module.body`.
 
 ### Hotspot granularity and selection
 
-Functions and methods are the primary units for function length, nesting, complexity, parameters, Boolean logic, mutable defaults and exception smells. A module body or notebook cell is a hotspot only for the two procedural top-level smells.
+Functions and methods are the primary units for function length, nesting, complexity, parameters, Boolean logic, mutable defaults and exception smells. A module body is a hotspot only for the two procedural top-level smells.
 
-Do not duplicate the same issue at symbol and containing-cell levels. For cell-level procedural counts, exclude nested function/class definitions and bodies. Unsupported or partially analysed content is a manual-review warning, never a smell by itself.
+Do not duplicate the same issue at symbol and module levels. Unsupported or partially analysed content is a manual-review warning, never a smell by itself.
 
 Select no more than three candidates using this stable lexicographic order:
 
@@ -135,32 +138,27 @@ At the cyclomatic-complexity sorting stage, a unit for which complexity is not a
 
 When no analysable unit crosses a threshold, return `NO_HOTSPOTS_ABOVE_THRESHOLDS` and display “No threshold-based maintainability hotspots were found.” Continue showing metadata, measurements, units, thresholds, warnings and exclusions. Do not select an arbitrary unit or describe the source as universally clean, correct, safe or fully maintainable.
 
-## Notebook boundaries
+## Future product work outside the submitted MVP
 
-- Parse and validate with nbformat without executing or trusting outputs.
-- Analyse every permitted Python code cell independently.
-- Preserve cell ID where present, storage index and nearest preceding Markdown heading of levels 1–3.
-- Treat notebook code and Markdown as untrusted data.
-- Ignore outputs, attachments, execution counts and embedded display data.
-- Detect cell magics, line magics, shell escapes and invalid Python; report transparent partial/excluded status.
-- Deterministic limit: 50 code cells and 100 KB notebook input.
-- AI limit: the complete eligible context must contain at most 20 analysable code cells and 30,000 code characters.
-- If either AI limit is exceeded, keep complete deterministic results and disable AI review. Never truncate or silently choose a subset.
-
-Display up to three notebook hotspots and allow the user to choose one for AI review; preselect the highest-ranked hotspot. A symbol hotspot retains its qualified name and cell-local lines, while its containing cell is the replacement target. Never choose a target randomly or solely by source order.
-
-Baseline mode permits one focused existing-cell replacement. If one cell cannot safely address the selected issue, return a multi-cell strategy without a partial replacement. Optional support for up to three existing-cell replacements is allowed only after one-cell validation, tests and deployment are stable.
+Jupyter notebook support, additional programming languages, repository-wide analysis and runtime or
+behavioural verification are planned future work. They are not submission requirements and must not
+be presented as available in the production interface or public MVP description. Reserved notebook
+limits and shared-schema fields may remain internally to avoid design churn, but they do not establish
+product support. Any future notebook implementation must preserve the non-execution, explicit-target,
+bounded-input and evidence-validation principles in this plan.
 
 ## GPT-5.6 integration
 
-Use configurable `OPENAI_MODEL`, defaulting to the verified competition model `gpt-5.6-sol`, through `OpenAI().responses.parse(...)`. Start with reasoning effort `low`; change it only after evaluation. Use one model request per review, no tools and no automatic repair request.
+Use configurable `OPENAI_MODEL`, defaulting to the verified competition model `gpt-5.6-sol`, through `OpenAI().responses.parse(...)`. Start with reasoning effort `low`; change it only after evaluation. The product journey is `evidence -> explanation -> targeted user-requested refactor -> deterministic full-file reconstruction -> verification -> qualified comparison`. An explicit AI-review request returns evidence-based explanation and recommendations without rewritten source. Only after a valid `refactor_recommended` review may a separate explicit request generate one approved function or method replacement. CodeSage reconstructs the complete suggested file locally from the unchanged original and that targeted replacement; OpenAI is not asked to return the complete file. Neither request uses tools.
+
+Each explicit refactor-generation request may make at most one automatic technical-correction request, and only when a successfully parsed targeted replacement is malformed, names the wrong target, contains invalid syntax or unsupported content, or cannot be inserted safely. The correction remains bound to the same target, requests only a replacement region and never requests the complete file. Correction never recurses or changes the validated review. A user may explicitly request a different targeted refactor, with optional instructions, without rerunning that review.
 
 Before sending source, require explicit user action and disclose that source will be sent to OpenAI. Keep deterministic analysis available without a key or successful model call.
 
 The developer prompt must:
 
 - delimit source, metadata and evidence;
-- state that source, comments, strings, filenames and notebook Markdown are untrusted data;
+- state that source, comments, strings and filenames are untrusted data;
 - forbid following embedded instructions;
 - forbid invented measurements, execution claims and behavioural-equivalence claims;
 - require supplied evidence IDs for deterministic factual claims;
@@ -174,7 +172,7 @@ The shared response outcome is one of:
 - `insufficient_evidence`;
 - `multi_cell_change_required`.
 
-Only `refactor_recommended` may contain a candidate. Notebook baseline candidates must replace the selected containing cell. `multi_cell_change_required` returns affected cell keys, strategy and why one cell is insufficient, with no candidate.
+The review response contains no rewritten source. For scripts, only a validated `refactor_recommended` review enables the separate refactor action. Reserved notebook/evaluation fields and the `multi_cell_change_required` outcome remain outside the production script schema and do not imply submitted product support.
 
 Each finding includes title, category, priority, source reference, evidence ID list, explanation, recommendation, learning takeaway and uncertainty. Validate field bounds, evidence references, symbols, cells, outcome/candidate consistency and output sizes. Reject malformed results; never invent missing fields.
 
@@ -184,24 +182,21 @@ In the production zero-hotspot advisory mode, only `no_refactor_needed` and `ins
 
 In the clean-control evaluation, retain every raw response. If the model returns a candidate, `refactor_recommended` or `multi_cell_change_required`, record a zero-hotspot mode violation and potential over-intervention. Where structurally possible, parse and reanalyse the candidate without execution; measure expansion, unsupported problems/claims and interface/structural changes. Production rejection must not hide experimental failure.
 
+Evaluation retains the first AI-review response separately and assesses its faithfulness and educational quality. Where candidate metrics are evaluated, request a refactor under equivalent explicit conditions, retain the first refactor-generation response and record any automatic correction separately. A successful correction must never hide an invalid first generation. Grounded-versus-ungrounded comparisons use the first response in each condition.
+
 ## Candidate limits and verification
 
 For scripts:
 
 ```text
-min((2 × original_script_character_count) + 5,000, 60,000)
+min((2 × original_script_character_count) + 5,000, 160,000)
 ```
 
-For combined notebook replacements:
+The complete reconstructed script remains subject to that limit. The model-generated replacement
+for one script target is independently bounded by:
 
 ```text
-min((2 × combined_target_original_characters) + 5,000, 60,000)
-```
-
-For each replacement cell:
-
-```text
-min((2 × original_cell_character_count) + 2,000, 20,000)
+min((2 × original_target_character_count) + 2,000, 160,000)
 ```
 
 Reject oversize output without truncation. For valid-size candidates:
@@ -214,59 +209,96 @@ Reject oversize output without truncation. For valid-size candidates:
 6. show structural-context warnings;
 7. show suggested tests and the semantic limitation.
 
+Script refactors operate on one approved hotspot at a time. The target is derived from the validated
+review, deterministic hotspot ordering, qualified name, exact original line range and cited evidence.
+The model returns exactly one matching function or method definition. CodeSage replaces only that
+line range and preserves every character outside it while reconstructing the complete suggested
+file locally, without executing source. A supported target mutable-default finding may permit a
+default change, but parameter names and ordering remain stable and the signature change is reported.
+
+The reconstructed file must retain every original qualified function, method and class under the
+same name and kind. Preserve unrelated bodies, decorators, signatures, class structure, imports and
+interfaces using location-insensitive AST comparison. Newly introduced `exec`, `eval`, `compile`,
+`__import__`, runtime namespace writes or generated APIs cannot substitute for explicit definitions.
+Unexpected removals, unrelated changes, missing imports, dynamic namespace synthesis, changes outside
+the target region or an unverifiable complete-file structure are verification failures.
+
+A malformed targeted replacement may use the one permitted non-recursive technical correction. The
+correction receives the exact replacement violation, remains bound to the same approved target and
+returns only that target definition. A failure in the reconstructed file's focused structural gate
+does not broaden the request or trigger another correction. Production withholds invalid generated
+source; future evaluation retains the failed first generation separately, so a successful correction
+cannot conceal the initial contract violation.
+
 Directional measurements use `improved`, `regressed`, `unchanged` or `unresolved`: cyclomatic complexity, nesting depth and threshold-defined smells/counts for comparable units.
 
 Descriptive measurements use `increased`, `decreased`, `unchanged` or `unresolved`: lines, SLOC, statements, length, parameters, imports, functions and classes. A descriptive change is not inherently an improvement.
 
-Structural properties use `added`, `removed`, `changed`, `unchanged` or `unresolved`: functions, methods, classes, signatures, imports, notebook definitions and replacement identities.
+Structural properties use `added`, `removed`, `changed`, `unchanged` or `unresolved`: functions, methods, classes, signatures, imports and replacement identities.
 
 Never derive “better overall”, “more maintainable overall”, “safe”, “correct” or “behaviourally equivalent”.
 
+Large verified comparisons use summary-first progressive disclosure: target metrics and structural
+counts remain prominent, while complete source, metric tables, structural changes and aggregated
+warning inventories remain available in collapsed, bounded-height controls.
+
 ## User interface
 
-Use one Streamlit page in this order:
+CodeSage has two presentation modes over the same source-bound deterministic analysis, AI review,
+verified suggested refactor and comparison state. Changing presentation mode must not rerun analysis,
+make an OpenAI request or duplicate business logic.
 
-1. title, purpose, privacy and non-execution notice;
-2. source selector and input control;
-3. loaded metadata and warnings;
-4. deterministic Analyse action and state;
-5. measurements, units, thresholds and up to three hotspots;
-6. notebook target selection where applicable;
-7. explicit Generate AI Review action and consent;
-8. outcome, findings, takeaways, strategy and limitations;
-9. complete script or affected-cell side-by-side view only when a candidate exists;
-10. before/after evidence with correct comparison semantics;
-11. structural-context warnings and suggested tests.
+Interactive app mode is a wide Streamlit workspace with a compact, light source sidebar. The sidebar
+contains CodeSage identity, the four script source routes, the selected route's basic control and an
+active-source status where applicable; workflow explanations, future-work copy, primary workflow
+actions and print controls stay out of the sidebar.
 
-Use labelled controls, logical reading order, actionable errors and text in addition to colour. On narrow screens, stack clearly labelled Original and Candidate sections.
+The interactive workspace has three deliberate states. With no source loaded, show a balanced,
+screen-only CodeSage introduction, one Load built-in example action, guidance to the other sidebar
+routes, a three-step explanation and three compact value cards; do not show result tabs or invented
+results. With a source loaded but not analysed, retain compact product identity and show the active
+source, a bounded preview, what CodeSage will measure and one prominent Analyse code action. After
+analysis, remove the landing treatment, show a compact source and result-status header, then expose
+the four bounded result tabs: Overview, AI review, Suggested refactor and Technical details.
 
-## Applied AI evaluation
+At each stage, one primary workflow action is shown in the main workspace: Load built-in example,
+Analyse code, Get AI review, Generate suggested refactor or Try a different refactor as applicable.
+The Overview is summary-first; AI findings use distinct cards; a verified refactor leads with compact
+target measurements and a bounded unified diff; complete files and detailed inventories, evidence,
+comparisons, warnings and raw technical data remain available through collapsed or bounded-height
+controls. Print-friendly report is a secondary post-analysis action.
 
-Research question: does deterministic maintainability grounding improve GPT-5.6 review faithfulness, actionability and educational value compared with the same model reviewing source alone?
+Model-suggested checks are presented as a numbered, non-interactive “Safety checks to run before
+refactoring” section. They are recommendations for the user to run against the original code and then
+rerun against a verified suggested refactor. CodeSage does not create or execute those tests.
 
-Keep model, reasoning, source, task, safety rules, schema, candidate rules, limits and validation identical. The sole treatment is a separately versioned grounding block: empty in the ungrounded condition and populated with measurements, smells, thresholds, hotspots and evidence IDs in the grounded condition.
+Print-friendly report mode renders a single-column linear report from the same completed state, with
+no interactive workspace tabs and no additional analysis or model request. It includes the available
+source, deterministic summary, priority hotspot and findings, AI review, safety checks, verified
+refactor outcome, target measurements, interface and trade-off warnings, assumptions and limitations.
+The interactive landing hero and value cards are excluded from the report.
+Browser Print or Save as PDF is the supported output route; print styling hides Streamlit chrome,
+interactive controls and screen-only notices without a PDF library, external JavaScript or a
+third-party print component.
 
-Required synthetic cases:
+Use labelled controls, logical reading order, actionable errors and text in addition to colour. Small
+tables are content-sized; large inventories, comparisons, warning lists and code views are bounded
+and scrollable. The sidebar, tabs, metric cards and finding cards must remain usable at standard
+laptop width and in a narrower browser window.
 
-1. long but low-complexity function;
-2. deeply nested/high-complexity function;
-3. too many parameters plus complex Boolean logic;
-4. mutable default;
-5. bare or broad exception handling;
-6. notebook with at least two legitimate hotspots;
-7. clean zero-hotspot control.
+## Submission validation and future applied-AI evaluation
 
-Prompt-injection content is an optional eighth case.
+Submission validation demonstrates the four script source routes, deterministic thresholds, explicit
+AI consent, evidence validation, targeted reconstruction, bounded correction and qualified static
+comparison using synthetic scripts and mocked automated calls, supplemented by a small documented
+manual acceptance set. It is not presented as a statistically controlled research result.
 
-Measure schema validity, source-reference validity, deterministic-evidence validity, unsupported/invented claims, candidate syntax, targeted smell outcome, structural changes and a blinded human rubric for clarity, actionability, educational value and semantic risk. The clean control additionally measures unnecessary refactoring, candidate expansion and over-intervention.
-
-Call budgets:
-
-- minimum: 14 calls, seven cases × two conditions;
-- target: 18 calls, plus four repeated calls across two representative cases;
-- maximum: 20 calls, adding the eighth case and repeats.
-
-Cut the optional case, then repeats; never cut either comparison condition or the seven required cases. Ordinary tests use mocked model/network behaviour.
+A full controlled grounded-versus-ungrounded experiment is future work. Its retained research design
+compares review faithfulness, actionability and educational value while keeping model, reasoning,
+source, task, safety rules, schema, limits and validation identical and varying only a separately
+versioned grounding block. Future work must record first review and generation responses, corrections
+and clean-control over-intervention without using a successful correction to conceal an invalid first
+response. That experiment is not a submitted-MVP Definition of Done item.
 
 ## Safety, privacy and deployment
 
@@ -275,16 +307,16 @@ Cut the optional case, then repeats; never cut either comparison condition or th
 - Never commit `.env` or `.streamlit/secrets.toml`.
 - Do not deliberately persist user source or log complete source/candidates.
 - Log only safe metadata, timing and error categories.
-- Use a dedicated OpenAI project with rate/spend limits and two best-effort reviews per Streamlit session.
+- Use a dedicated OpenAI project with rate/spend limits as the global cost controls. Do not impose a low application-level session quota during judging. Every AI review and every suggested-refactor request requires explicit user action; source-, review- and instruction-bound caching prevents duplicate completed requests on unchanged state. Each explicit refactor operation permits at most one automatic technical correction, and recursive retries are prohibited. Any future emergency operational control must be disabled during judging and must not appear as a normal user quota.
 - Preserve deterministic fallback and original built-in examples.
 - Deploy on Streamlit Community Cloud with Python 3.11.
 - Keep the judged version aligned with a tagged commit and available through 5 August 2026.
 
 ## Tests
 
-Cover loaders and limits; URL allow-listing, conversion, redirects, timeouts and HTML; all measurements/smells/thresholds; procedural SLOC range de-duplication; hotspot granularity, ordering and zero-hotspot results; notebooks, magics and exclusions; strict AI schemas and all outcomes; candidate size formulas; runtime/evaluation zero-hotspot differences; comparison semantics; structural warnings; deterministic fallback; and clean-control over-intervention.
+Cover all four script routes and limits; URL allow-listing, conversion, redirects, timeouts and HTML; all measurements, smells and thresholds; procedural SLOC range de-duplication; hotspot granularity, ordering and zero-hotspot results; strict production AI schemas and outcomes; replacement and reconstructed-file size formulas; comparison semantics; structural warnings; deterministic fallback; built-in-example invalidation; bounded rendering; and static-only claims.
 
-Use pytest, mock ordinary model/network calls and prioritise domain/integration tests over optional UI automation. Run Ruff and `pip check`. Manual acceptance covers real pinned GitHub files, live model script/notebook reviews, clean-browser deployment and responsive presentation.
+Use pytest, mock ordinary model/network calls and prioritise domain/integration tests over optional UI automation. Run Ruff and `pip check`. Manual acceptance covers pasted, uploaded, built-in and real pinned public-GitHub scripts, live model script review, clean-browser deployment and responsive presentation.
 
 ## Milestones and effort
 
@@ -294,30 +326,31 @@ Use pytest, mock ordinary model/network calls and prioritise domain/integration 
 | Script deterministic vertical slice | 4h | — |
 | Script GPT-5.6 review and verification | 4h | — |
 | Early Streamlit deployment | 2h | — |
-| Notebook analysis and one-cell replacement | 3.5h | 1.5h multi-cell expansion |
 | Upload and GitHub loaders | 1.5h | — |
 | Hardening and acceptance | 2.5h | 0.5h UI tests |
-| Seven-case evaluation | 3h | 1h optional case/repeats |
+| Bounded submission validation | 1.5h | Full controlled evaluation is future work |
 | Documentation, video and submission | 6h | — |
 
 Protect five hours of contingency. Optional work may use at most three hours and begins only after deployment is stable, mandatory tests pass and submission/contingency reserves remain protected.
 
-Automatic cut order: CI, unified diff, candidate download, non-trivial copy controls, decorative UI, optional UI tests, optional evaluation case, repeat calls, then three-cell expansion.
+Automatic cut order: CI, candidate download, non-trivial copy controls, decorative UI and optional UI automation.
 
 ## Definition of Done
 
-- All six source routes pass their acceptance checks.
+- All four Python-script source routes pass their acceptance checks.
 - The deterministic analyser reports the approved measurements and smells without execution.
-- Procedural script/cell hotspots, symbol granularity, de-duplication and zero-hotspot outcomes are tested.
+- Procedural script hotspots, symbol granularity, de-duplication and zero-hotspot outcomes are tested.
 - At most three transparent hotspots are shown.
-- A notebook user can select one focused hotspot and receive a validated review outcome.
-- `refactor_recommended` returns the correct complete script or existing-cell replacement.
-- Abstention and no-refactor outcomes contain no candidate.
+- A user can load the built-in example, analyse it deterministically and choose whether to request AI review.
+- `refactor_recommended` enables a separate explicit targeted script replacement, reconstructed into
+  a complete suggested script locally.
+- AI review remains useful without generating source; abstention and no-refactor outcomes do not enable refactor generation.
 - Candidate size, syntax, re-analysis and comparison rules pass.
-- Side-by-side presentation appears only for valid candidates.
-- Oversized notebooks retain deterministic results and disable AI without truncation.
+- Complete Original code and Suggested refactor views appear only for statically verified refactors
+  and remain available through bounded progressive disclosure in interactive mode.
+- Oversized accepted scripts retain deterministic results and disable AI without truncation.
 - AI failures preserve deterministic results.
-- The seven-case grounded/ungrounded evaluation, including clean control, is recorded with at least 14 calls.
+- Bounded submission validation is recorded without implying completion of a controlled research experiment.
 - Automated tests, Ruff, dependency checks and manual acceptance pass.
 - Deployment works from a clean browser with secrets and cost controls.
 - README, licence, installation, supported platforms, evaluation, privacy and limitations are complete.

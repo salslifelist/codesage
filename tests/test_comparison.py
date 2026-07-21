@@ -91,7 +91,7 @@ def test_structural_inventory_uses_exact_names_and_does_not_infer_renames():
     assert structural(result, "class", "RemovedClass").status is StructuralStatus.REMOVED
     assert structural(result, "class", "AddedClass").status is StructuralStatus.ADDED
     assert structural(result, "signature", "signature").status is StructuralStatus.CHANGED
-    assert any("signature has a changed signature" in warning for warning in result.warnings)
+    assert any("`signature` has a changed signature" in warning for warning in result.warnings)
     assert structural(result, "import", ":os").status is StructuralStatus.REMOVED
     assert structural(result, "import", ":sys").status is StructuralStatus.ADDED
     assert structural(result, "import", "shared:item").status is StructuralStatus.UNCHANGED
@@ -199,3 +199,30 @@ def test_smell_comparison_is_severity_and_smell_specific():
         metric(result.directional, "focused", "smell.deep_nesting").status
         is DirectionalStatus.REGRESSED
     )
+
+
+def test_missing_unit_smells_are_unresolved_not_removed():
+    original = analyse_script("def missing(value=[]):\n    return value\n")
+    candidate = analyse_script("value = 1\n")
+    result = compare_scripts(original, candidate)
+
+    missing_metrics = [item for item in result.directional if item.qualified_name == "missing"]
+    assert missing_metrics
+    assert all(item.status is DirectionalStatus.UNRESOLVED for item in missing_metrics)
+    assert "missing:mutable_default" not in result.smells_removed
+
+
+def test_target_body_change_has_no_generic_structural_identity_warning():
+    original = analyse_script("def focused(value=[]):\n    return value\n")
+    body_change = analyse_script("def focused(value=[]):\n    return list(value)\n")
+    result = compare_scripts(original, body_change)
+    assert not any("structural identity" in warning for warning in result.warnings)
+
+
+def test_supported_default_change_has_accessible_behavioural_warning():
+    original = analyse_script("def focused(fallback=[]):\n    return fallback\n")
+    candidate = analyse_script("def focused(fallback=None):\n    return fallback\n")
+    result = compare_scripts(original, candidate)
+    assert any("shared mutable value" in warning for warning in result.warnings)
+    assert any("Test callers" in warning for warning in result.warnings)
+    assert not any("structural identity" in warning for warning in result.warnings)

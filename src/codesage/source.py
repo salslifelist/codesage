@@ -10,18 +10,37 @@ from urllib.parse import urljoin, urlsplit, urlunsplit
 import httpx
 
 from codesage.analysis import source_digest
+from codesage.config import (
+    DECODED_SOURCE_CHARACTER_LIMIT,
+    GITHUB_REQUEST_TIMEOUT_SECONDS,
+    MAX_VALIDATED_GITHUB_REDIRECTS,
+    PASTED_SOURCE_CHARACTER_LIMIT,
+    SCRIPT_AI_REVIEW_CHARACTER_LIMIT,
+    SOURCE_RESPONSE_BYTE_LIMIT,
+)
 
-SOURCE_INGESTION_LIMIT = 200_000
-AI_REVIEW_CHARACTER_LIMIT = 20_000
-GITHUB_TIMEOUT_SECONDS = 10.0
-MAX_GITHUB_REDIRECTS = 3
+# Compatibility names remain importable while callers migrate to the precise
+# canonical names above.
+SOURCE_INGESTION_LIMIT = PASTED_SOURCE_CHARACTER_LIMIT
+AI_REVIEW_CHARACTER_LIMIT = SCRIPT_AI_REVIEW_CHARACTER_LIMIT
+GITHUB_TIMEOUT_SECONDS = GITHUB_REQUEST_TIMEOUT_SECONDS
+MAX_GITHUB_REDIRECTS = MAX_VALIDATED_GITHUB_REDIRECTS
 APPROVED_GITHUB_HOSTS = {"github.com", "raw.githubusercontent.com"}
+BUILT_IN_EXAMPLE = """def choose_priority_item(items, selected=[]):
+    for item in items:
+        if item.get("available"):
+            if item.get("priority"):
+                if item["priority"] > 5:
+                    selected.append(item)
+    return selected[0] if selected else None
+"""
 
 
 class SourceOrigin(StrEnum):
     PASTED = "pasted"
     UPLOADED = "uploaded"
     GITHUB = "github"
+    EXAMPLE = "example"
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,6 +50,7 @@ class SourceDocument:
     origin: SourceOrigin
     external_reference: str | None
     source_digest: str
+    byte_count: int
 
     @classmethod
     def create(
@@ -39,12 +59,25 @@ class SourceDocument:
         display_name: str,
         origin: SourceOrigin,
         external_reference: str | None = None,
+        byte_count: int | None = None,
     ) -> SourceDocument:
-        return cls(text, display_name, origin, external_reference, source_digest(text))
+        resolved_byte_count = len(text.encode("utf-8")) if byte_count is None else byte_count
+        return cls(
+            text,
+            display_name,
+            origin,
+            external_reference,
+            source_digest(text),
+            resolved_byte_count,
+        )
 
     @property
     def identity(self) -> tuple[str, SourceOrigin, str, str | None]:
         return (self.source_digest, self.origin, self.display_name, self.external_reference)
+
+    @property
+    def ai_eligible(self) -> bool:
+        return len(self.text) <= SCRIPT_AI_REVIEW_CHARACTER_LIMIT
 
 
 class SourceIngestionError(ValueError):
@@ -54,17 +87,34 @@ class SourceIngestionError(ValueError):
         self.message = message
 
 
-def _validate_text_size(text: str) -> None:
-    if len(text) > SOURCE_INGESTION_LIMIT:
+def _validate_pasted_text_size(text: str) -> None:
+    if len(text) > PASTED_SOURCE_CHARACTER_LIMIT:
         raise SourceIngestionError(
             "source_too_large",
-            f"Source must not exceed {SOURCE_INGESTION_LIMIT:,} characters.",
+            f"Pasted source must not exceed {PASTED_SOURCE_CHARACTER_LIMIT:,} characters.",
+        )
+
+
+def _validate_decoded_text_size(text: str) -> None:
+    if len(text) > DECODED_SOURCE_CHARACTER_LIMIT:
+        raise SourceIngestionError(
+            "decoded_source_too_large",
+            f"Decoded source must not exceed {DECODED_SOURCE_CHARACTER_LIMIT:,} characters.",
         )
 
 
 def normalise_pasted_source(text: str) -> SourceDocument:
-    _validate_text_size(text)
+    _validate_pasted_text_size(text)
     return SourceDocument.create(text, "Pasted source", SourceOrigin.PASTED)
+
+
+def normalise_example_source() -> SourceDocument:
+    """Return the small, original script used for no-setup product exploration."""
+    return SourceDocument.create(
+        BUILT_IN_EXAMPLE,
+        "CodeSage example.py",
+        SourceOrigin.EXAMPLE,
+    )
 
 
 def normalise_uploaded_file(filename: str, content: bytes) -> SourceDocument:
@@ -73,10 +123,10 @@ def normalise_uploaded_file(filename: str, content: bytes) -> SourceDocument:
         raise SourceIngestionError("invalid_extension", "Upload one .py file.")
     if not content:
         raise SourceIngestionError("empty_source", "The uploaded Python file is empty.")
-    if len(content) > SOURCE_INGESTION_LIMIT:
+    if len(content) > SOURCE_RESPONSE_BYTE_LIMIT:
         raise SourceIngestionError(
             "source_too_large",
-            f"Upload must not exceed {SOURCE_INGESTION_LIMIT:,} bytes.",
+            f"Upload must not exceed {SOURCE_RESPONSE_BYTE_LIMIT:,} bytes.",
         )
     try:
         text = content.decode("utf-8-sig")
@@ -86,8 +136,8 @@ def normalise_uploaded_file(filename: str, content: bytes) -> SourceDocument:
         ) from error
     if not text:
         raise SourceIngestionError("empty_source", "The uploaded Python file is empty.")
-    _validate_text_size(text)
-    return SourceDocument.create(text, display_name, SourceOrigin.UPLOADED)
+    _validate_decoded_text_size(text)
+    return SourceDocument.create(text, display_name, SourceOrigin.UPLOADED, byte_count=len(content))
 
 
 def _validated_github_fetch_url(url: str) -> str:
@@ -122,18 +172,18 @@ def fetch_github_source(url: str, *, client: httpx.Client | None = None) -> Sour
     current_url = _validated_github_fetch_url(url)
     owns_client = client is None
     if client is None:
-        client = httpx.Client(timeout=GITHUB_TIMEOUT_SECONDS, follow_redirects=False)
+        client = httpx.Client(timeout=GITHUB_REQUEST_TIMEOUT_SECONDS, follow_redirects=False)
     try:
-        for redirect_count in range(MAX_GITHUB_REDIRECTS + 1):
+        for redirect_count in range(MAX_VALIDATED_GITHUB_REDIRECTS + 1):
             try:
                 with client.stream(
                     "GET",
                     current_url,
-                    timeout=GITHUB_TIMEOUT_SECONDS,
+                    timeout=GITHUB_REQUEST_TIMEOUT_SECONDS,
                     follow_redirects=False,
                 ) as response:
                     if response.status_code in {301, 302, 303, 307, 308}:
-                        if redirect_count == MAX_GITHUB_REDIRECTS:
+                        if redirect_count == MAX_VALIDATED_GITHUB_REDIRECTS:
                             raise SourceIngestionError(
                                 "too_many_redirects",
                                 "The GitHub response redirected too many times.",
@@ -171,19 +221,19 @@ def fetch_github_source(url: str, *, client: httpx.Client | None = None) -> Sour
                             "github_error", "GitHub could not provide the requested file."
                         )
                     declared_length = response.headers.get("content-length")
-                    if declared_length and int(declared_length) > SOURCE_INGESTION_LIMIT:
+                    if declared_length and int(declared_length) > SOURCE_RESPONSE_BYTE_LIMIT:
                         raise SourceIngestionError(
                             "source_too_large",
-                            f"Remote file must not exceed {SOURCE_INGESTION_LIMIT:,} bytes.",
+                            f"Remote file must not exceed {SOURCE_RESPONSE_BYTE_LIMIT:,} bytes.",
                         )
                     chunks: list[bytes] = []
                     byte_count = 0
                     for chunk in response.iter_bytes():
                         byte_count += len(chunk)
-                        if byte_count > SOURCE_INGESTION_LIMIT:
+                        if byte_count > SOURCE_RESPONSE_BYTE_LIMIT:
                             raise SourceIngestionError(
                                 "source_too_large",
-                                f"Remote file must not exceed {SOURCE_INGESTION_LIMIT:,} bytes.",
+                                f"Remote file must not exceed {SOURCE_RESPONSE_BYTE_LIMIT:,} bytes.",
                             )
                         chunks.append(chunk)
                     content = b"".join(chunks)
@@ -198,10 +248,14 @@ def fetch_github_source(url: str, *, client: httpx.Client | None = None) -> Sour
                             "decode_error",
                             "The GitHub file is not valid UTF-8 or UTF-8 with BOM.",
                         ) from error
-                    _validate_text_size(text)
+                    _validate_decoded_text_size(text)
                     display_name = PurePath(urlsplit(current_url).path).name
                     return SourceDocument.create(
-                        text, display_name, SourceOrigin.GITHUB, original_url
+                        text,
+                        display_name,
+                        SourceOrigin.GITHUB,
+                        original_url,
+                        byte_count=len(content),
                     )
             except httpx.TimeoutException as error:
                 raise SourceIngestionError(

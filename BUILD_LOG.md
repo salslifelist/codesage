@@ -87,8 +87,8 @@ This log records material decisions, verified bootstrap events and milestone out
   for each analysed source in a session.
 - Added one canonical source-document model for pasted source, UTF-8 Python uploads and bounded
   public GitHub file URLs, with origin-aware stale-state invalidation and no source persistence.
-- Separated the 200,000-character/byte ingestion limit from the 20,000-character complete-file AI
-  review limit so larger accepted files retain deterministic analysis without truncation.
+- Separated the 200,000-character/byte acquisition limits from the complete-file AI-review limit
+  so larger accepted files retain deterministic analysis without truncation.
 - Added safe rendering for deterministic hotspots, grounded findings, candidates, static
   verification, comparisons, warnings and typed privacy-safe failures without source execution.
 - Added a lean script-only production structured-output schema and normalised successful parses
@@ -103,3 +103,163 @@ This log records material decisions, verified bootstrap events and milestone out
   resolution, secret-file ignores and removal of temporary verification artefacts.
 - No additional live OpenAI API request occurred during the schema correction, and no deployment
   occurred.
+
+## 19 July 2026 — Specification alignment and script-contract hardening
+
+- Centralised script acquisition, decoded-content, AI-review, candidate, request and session limits.
+- Verified 200,000-character pasted acquisition, 200,000-byte upload/GitHub acquisition and an
+  independent decoded-content guard without truncation.
+- Raised complete-file script AI eligibility to 100,000 characters and retained deterministic-only
+  behaviour above that limit through the acquisition ceiling.
+- Applied the 160,000-character absolute script-candidate ceiling, retained one bounded
+  candidate-only repair and preserved the primary grounded response separately from any repaired
+  candidate.
+- Added session-wide limits of two primary reviews and one repair request, exact zero-hotspot copy,
+  deterministic detail, OpenAI disclosure and verified-only Original/Candidate presentation.
+- Verified 153 tests, Ruff checks and formatting, dependency consistency and whitespace checks.
+  All OpenAI and HTTP interactions remained mocked; no live OpenAI or external HTTP request was
+  made and no deployment occurred.
+
+## 20 July 2026 — Bounded deterministic-results presentation
+
+- Replaced sequential per-unit rendering with a summary-first view, concise priority hotspots and
+  one collapsed, bounded-height analysable-unit inventory.
+- Kept thresholds, warnings, exclusions and technical data accessible in proportionate collapsed
+  sections without changing deterministic analysis or hotspot selection.
+- Verified 159 tests, Ruff checks and formatting, dependency consistency and whitespace checks.
+  No live OpenAI or external HTTP request was made.
+
+## 20 July 2026 — Separate AI review and suggested-refactor workflow
+
+- Separated the evidence-based AI explanation schema and request from explicit complete-file
+  refactor generation, while retaining strict evidence and source-digest validation.
+- Added source-, review- and instruction-bound caching, explicit alternative-refactor requests and
+  at most one non-recursive technical correction for an unverifiable generated file.
+- Removed low application-level session quotas and replaced technical candidate terminology in the
+  normal interface with accessible review and suggested-refactor language.
+- Superseded the session limits recorded in the 19 July historical milestone; production no longer
+  blocks reviews, refactors or corrections based on session-wide call counts.
+- Preserved a valid review and any previously verified refactor when a later generation fails.
+- Verified 100 tests, Ruff checks and formatting, dependency consistency and whitespace checks.
+  All OpenAI and HTTP interactions remained mocked; no live OpenAI or external HTTP request was
+  made.
+
+## 20 July 2026 — Test-coverage regression audit
+
+- Accounted for obsolete bundled-review and quota tests and restored meaningful coverage for
+  acquisition failures, AI boundary failures, refactor limits, correction bounds, privacy and
+  bounded interface rendering without changing production behaviour.
+- Verified 134 tests, Ruff checks and formatting, dependency consistency and whitespace checks.
+  All OpenAI and HTTP interactions remained mocked; no live OpenAI or external HTTP request was
+  made.
+
+## 20 July 2026 — Focused-refactor verification and bounded results
+
+- Added validated-target derivation and location-insensitive AST preservation checks for original
+  definitions, unrelated bodies and signatures, imports and target parameter shape.
+- Rejected newly introduced runtime code generation and namespace synthesis, and made focused-scope
+  failures eligible for the existing single non-recursive technical correction.
+- Prevented missing units from being reported as smell removals and replaced unbounded refactor
+  output with target-first summaries, collapsed code and bounded comparison and warning tables.
+- Verified 156 tests, Ruff checks and formatting, dependency consistency and whitespace checks.
+  All OpenAI and HTTP interactions remained mocked; no live OpenAI or external HTTP request was
+  made.
+
+### Live 49,800-character focused-refactor acceptance
+
+- Manually accepted `codesage_50k_hotspot.py`: 1,395 physical lines, 1,008 SLOC, 63 functions,
+  184 methods, 62 classes and 248 analysable units. The reviewed `choose_priority_item` target had
+  nesting depth 5, complexity 6, and mutable-default and deep-nesting smells.
+- The first generated refactor passed focused verification without correction. It preserved every
+  unrelated explicit definition and introduced no dynamic generation or namespace synthesis;
+  structural counts were 0 added, 0 removed, 2 changed, 557 unchanged and 0 unresolved.
+- Target nesting improved from 5 to 3 and both detected smells were removed. Complexity increased
+  from 6 to 7, SLOC from 11 to 12 and statements from 10 to 11; parameter count remained 2. The
+  evidence-supported mutable list default changed to `None`.
+- Static verification did not establish behavioural equivalence. With all code and comparison
+  sections expanded, the bounded result occupied eight pages rather than the previous 55-page flow.
+
+### Post-acceptance result-state and labels
+
+- Replaced the completed generation action in place with `Try a different refactor` after verified
+  state changes, without a rerun or additional model request.
+- Added readable outcome, target, smell, correction and structural labels and moved canonical
+  evidence references into collapsed evidence details.
+- Verified 162 tests, Ruff checks and formatting, dependency consistency and whitespace checks.
+  All OpenAI and HTTP interactions remained mocked; no live OpenAI or external HTTP request was
+  made.
+
+### Optional-instructions partial-resolution acceptance
+
+- Reused the unchanged AI review in the same session and followed the requested no-`continue`,
+  no-helper preference without rerunning the review.
+- The verified alternative resolved the mutable-default issue but left deep nesting at 4, exactly
+  the configured deep-nesting threshold, exposing the need for a prominent partial-resolution
+  summary distinct from technical verification.
+- Added deterministic reviewed-issue outcome classification and prominent measured trade-offs;
+  verified 168 tests, Ruff checks and formatting, dependency consistency and whitespace checks.
+  All OpenAI and HTTP interactions remained mocked; no live OpenAI or external HTTP request was
+  made.
+
+### Targeted script-refactor reconstruction
+
+- Replaced complete-file model generation with a strict target-reference and single-definition
+  response for one deterministically approved function or method hotspot.
+- Reconstructed the complete suggested script locally by preserving the exact original prefix and
+  suffix around the approved line range, then applied the existing syntax, deterministic analysis,
+  focused-structure and comparison gates to the reconstructed file.
+- Kept the single non-recursive technical correction bound to the same target and limited it to
+  malformed targeted replacements; a model-produced full module, wrong definition, multiple
+  definitions, Markdown, prose, ellipses or invalid syntax is not accepted as a refactor.
+- Verified preservation with a synthetic script containing 205 unrelated functions and verified
+  182 tests, Ruff checks and formatting, dependency consistency and whitespace checks. All OpenAI
+  and HTTP interactions remained mocked; no live OpenAI or external HTTP request was made.
+
+### Submission scope freeze and focused interface
+
+- Froze the submitted product scope to complete Python scripts supplied by paste, local `.py`
+  upload, one public-GitHub `.py` URL or the original built-in example; notebook, additional-language,
+  repository-wide, runtime-verification and full controlled-evaluation work is explicitly future.
+- Added a canonical, no-setup example route with the same source identity and stale-result
+  invalidation behaviour as other scripts, without automatic AI review.
+- Replaced normal-flow source JSON with a concise summary, added a three-stage workflow indicator,
+  and reorganised AI review output into a scan-first outcome, bordered finding sections, visible
+  measured evidence and recommendations, a suggested-test checklist and collapsed limitations.
+- Clarified refactor outcomes as reviewed static findings and retained the visible complexity and
+  non-equivalence qualifications.
+- Applied a restrained native Streamlit light theme without custom CSS or additional dependencies.
+- Verified 189 tests, Ruff checks and formatting, dependency consistency, Streamlit theme loading
+  and whitespace checks. All OpenAI and HTTP interactions remained mocked; no live OpenAI or
+  external HTTP request was made.
+
+### Screen-first and print-friendly interface
+
+- Added a wide, sidebar-led interactive workspace with Overview, AI review, Suggested refactor and
+  Technical details tabs, all using the existing source-bound state without changing production
+  analysis or AI behaviour.
+- Added a same-state linear print-friendly report with screen-only print/return controls and local
+  print CSS that hides app chrome and controls, without a PDF library, external JavaScript, an
+  external print component or a network dependency.
+- Reframed model-suggested checks as a numbered, non-interactive `Safety checks to run before
+  refactoring` section, explained that CodeSage neither creates nor executes those tests, and added
+  the equivalent post-refactor reminder.
+- Replaced long default result flows with compact measurements and finding cards, a bounded unified
+  hotspot diff, collapsed complete-file views and size-aware technical tables while retaining the
+  full verified result data.
+- Verified 198 tests, Ruff checks and formatting, dependency consistency, Streamlit theme loading,
+  a no-exception local app/print/return runtime smoke and whitespace checks. All OpenAI and HTTP
+  interactions remained mocked; no live OpenAI or external HTTP request was made.
+
+### Landing-page and state-transition clarification
+
+- Added distinct no-source, ready-to-analyse and completed-analysis screens. Result tabs are absent
+  until deterministic analysis completes; the landing screen contains one built-in-example action,
+  a two-column product introduction and three static value cards without invented result data.
+- Moved all workflow and print actions out of the sidebar. The light source panel now contains only
+  source selection, its basic acquisition control and compact active-source status; each workflow
+  stage presents one primary action in the main workspace.
+- Added a bounded source preview and Ready to analyse card, a compact post-analysis status header and
+  durable source-route restoration so entering and leaving print mode preserves completed state.
+- Verified 205 tests, Ruff checks and formatting, dependency consistency, a no-exception local
+  landing/example/analysis/print/return Streamlit state-transition smoke and whitespace checks. All
+  OpenAI and HTTP interactions remained mocked; no live OpenAI or external HTTP request was made.

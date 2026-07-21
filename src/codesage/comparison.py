@@ -184,10 +184,22 @@ def compare_scripts(original: AnalysisResult, candidate: AnalysisResult) -> Scri
             )
             structural.append(StructuralChange("signature", name, status))
             if status is StructuralStatus.CHANGED:
-                warnings.append(
-                    f"{name} has a changed signature; runtime compatibility is not established."
-                )
-            if _unit_fingerprint(before) != _unit_fingerprint(after):
+                before_codes = {smell.code for smell in before.smells}
+                after_codes = {smell.code for smell in after.smells}
+                if "mutable_default" in before_codes - after_codes:
+                    warnings.append(
+                        f"A default value in `{name}` changed from a shared mutable value to a "
+                        "non-mutable sentinel. Test callers that may depend on state being retained "
+                        "between calls."
+                    )
+                else:
+                    warnings.append(
+                        f"`{name}` has a changed signature. Test callers that depend on the "
+                        "previous interface."
+                    )
+            before_identity = _unit_fingerprint(before)[:-1]
+            after_identity = _unit_fingerprint(after)[:-1]
+            if before_identity != after_identity:
                 warnings.append(
                     f"{name} has changed structural identity; metric comparability is limited."
                 )
@@ -250,11 +262,18 @@ def compare_scripts(original: AnalysisResult, candidate: AnalysisResult) -> Scri
             status = StructuralStatus.UNCHANGED
         structural.append(StructuralChange("class", name, status))
 
+    comparable_names = set(before_units) & set(after_units)
     before_smells = {
-        f"{unit.qualified_name}:{smell.code}" for unit in original.units for smell in unit.smells
+        f"{unit.qualified_name}:{smell.code}"
+        for unit in original.units
+        if unit.qualified_name in comparable_names or unit.qualified_name == "<module>"
+        for smell in unit.smells
     }
     after_smells = {
-        f"{unit.qualified_name}:{smell.code}" for unit in candidate.units for smell in unit.smells
+        f"{unit.qualified_name}:{smell.code}"
+        for unit in candidate.units
+        if unit.qualified_name in comparable_names or unit.qualified_name == "<module>"
+        for smell in unit.smells
     }
     return ScriptComparison(
         directional=tuple(directional),
